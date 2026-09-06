@@ -7,6 +7,7 @@ import { Event } from '@models/event.model';
 import { EventStatus } from '@interfaces/event.interface';
 import { WAITER_PERMISSIONS, WaiterPermission } from '@interfaces/waiter.interface';
 import { Waiter } from '@models/waiter.model';
+import { OperatorGrant } from '@interfaces/operatorGrant.interface';
 
 const JWT_SECRET = process.env['JWT_SECRET'] || 'your-secret-key';
 
@@ -62,11 +63,13 @@ describe('the waiter floor screen', () => {
     expect(res.status).toBe(401);
   });
 
-  it('403s a waiter token missing VIEW_EVENTS — authenticated, but not authorised', async () => {
-    // A valid, correctly-scoped waiter token — it passes authenticateWaiter
-    // fine — just without the one capability this route requires. A 401
-    // here would mean the request never reached requireWaiterPermission at
-    // all, which would prove nothing about the gate.
+  it('authorises from the ROW, not the token — an empty permissions claim still works', async () => {
+    // The token's `permissions` is the POS's rendering copy; the row is what
+    // authorizes (see authenticateWaiter). A waiter carrying a stale or
+    // hand-emptied claim still holds the role floor, because the row does.
+    // This is the merchant-side contract, arrived at for the same reason:
+    // tokens live 7 days, so nothing a grant change must reach can be read
+    // off them.
     const { eventId, waiterId } = await seed();
     const token = jwt.sign({
       scope: 'waiter', userType: 'waiter', waiterId,
@@ -75,7 +78,42 @@ describe('the waiter floor screen', () => {
     }, JWT_SECRET);
     const res = await request(app).get('/api/waiter/events')
       .set('Authorization', `Bearer ${token}`);
-    expect(res.status).toBe(403);
-    expect(res.body.message).toBe(`Permission required: ${WaiterPermission.VIEW_EVENTS}`);
+    expect(res.status).toBe(200);
+  });
+
+  it('401s a waiter fired mid-shift, without waiting for the token to expire', async () => {
+    const { token, waiterId } = await seed();
+    await Waiter.findByIdAndUpdate(waiterId, { isActive: false });
+    const res = await request(app).get('/api/waiter/events')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(401);
+  });
+
+  it('401s a token naming a waiter row that no longer exists', async () => {
+    const { token, waiterId } = await seed();
+    await Waiter.findByIdAndDelete(waiterId);
+    const res = await request(app).get('/api/waiter/events')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(401);
+  });
+
+  it('answers with the LIVE permission set, so the POS renders from the row', async () => {
+    // The bug this covers: the organizer flips "Settling on" in the dashboard
+    // and nothing changes on the handheld, because the app was deciding from
+    // its own 7-day-old token. The floor screen asks the server instead.
+    const { token, waiterId } = await seed();
+
+    const before = await request(app).get('/api/waiter/events')
+      .set('Authorization', `Bearer ${token}`);
+    expect(before.body.data.permissions).toEqual(
+      expect.arrayContaining([WaiterPermission.VIEW_EVENTS, WaiterPermission.MANAGE_TABLES]),
+    );
+    expect(before.body.data.permissions).not.toContain(WaiterPermission.SETTLE_TABLES);
+
+    await Waiter.findByIdAndUpdate(waiterId, { grants: [OperatorGrant.SETTLE_TABLES] });
+
+    const after = await request(app).get('/api/waiter/events')
+      .set('Authorization', `Bearer ${token}`);
+    expect(after.body.data.permissions).toContain(WaiterPermission.SETTLE_TABLES);
   });
 });

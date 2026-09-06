@@ -2,7 +2,7 @@
 import { TicketsPermission } from '@interfaces/ticketsPermission.interface';
 import { CashierPermission } from '@interfaces/cashier.interface';
 import { MerchantPermission } from '@interfaces/merchant.interface';
-import { WaiterPermission } from '@interfaces/waiter.interface';
+import { WaiterPermission, WAITER_PERMISSIONS } from '@interfaces/waiter.interface';
 
 /**
  * Capabilities an organizer can grant to an INDIVIDUAL operator, on top of
@@ -117,6 +117,21 @@ export function grantedWaiterPermissions(grants: unknown): WaiterPermission[] {
  */
 export function deriveMerchantPermissions(grants?: string[] | null): MerchantPermission[] {
   return [MerchantPermission.CHARGE, ...grantedMerchantPermissions(grants)];
+}
+
+/**
+ * THE single definition of a waiter's permission set — the waiter-namespace
+ * twin of [deriveMerchantPermissions], and it exists for the same reason.
+ *
+ * The role floor (view events, manage tables) plus whatever the row's grants
+ * add — today only settling. Both the token mint (WaiterAuthService.login,
+ * the POS's rendering copy) and the per-request gate (authenticateWaiter, the
+ * authoritative check) call this rather than each spelling out the formula,
+ * because the two are deliberately the same computation and duplicating it is
+ * how they drift.
+ */
+export function deriveWaiterPermissions(grants: unknown): WaiterPermission[] {
+  return [...WAITER_PERMISSIONS, ...grantedWaiterPermissions(grants)];
 }
 
 /** Normalize an admin-supplied list: known values only, no duplicates. */

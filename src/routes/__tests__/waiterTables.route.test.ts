@@ -13,6 +13,7 @@ import { ProductCategory, StockMovementReason } from '@interfaces/stock.interfac
 import { WalletService } from '@services/wallet.service';
 import { Wallet } from '@models/wallet.model';
 import { Waiter } from '@models/waiter.model';
+import { OperatorGrant } from '@interfaces/operatorGrant.interface';
 import { Table } from '@models/table.model';
 import { enrolTags } from '@/__tests__/helpers/eventTags';
 
@@ -44,6 +45,11 @@ async function seedFloor(permissions: string[] = WAITER_PERMISSIONS, status = Ev
   const waiter = await Waiter.create({
     fullName: 'Thabo', loginCode: `WTRT${waiterSeq++}`, pin: '123456',
     scope: 'organizer', vendorId, eventId: event._id,
+    // The ROW is what authorizes (authenticateWaiter re-derives from it every
+    // request), so a suite asking for a settling waiter has to grant one —
+    // putting SETTLE_TABLES in the token claim alone proves nothing.
+    grants: permissions.includes(WaiterPermission.SETTLE_TABLES)
+      ? [OperatorGrant.SETTLE_TABLES] : [],
   });
   const token = jwt.sign({
     scope: 'waiter', userType: 'waiter', waiterId: String(waiter._id),
@@ -154,7 +160,7 @@ describe('waiter tables — add an item', () => {
   // called directly. A 401 here would mean the request never reached
   // requireWaiterPermission at all — see the gate-removal check in the
   // report for how this was verified to actually depend on the middleware.
-  it('403s a waiter token missing MANAGE_TABLES — authenticated, but not authorised', async () => {
+  it('serves an emptied token claim — the ROW carries the role floor', async () => {
     const { token } = await seedFloor([]);
     const someTableId = new mongoose.Types.ObjectId().toString();
 
@@ -165,7 +171,7 @@ describe('waiter tables — add an item', () => {
         qty: 1,
       });
 
-    expect(res.status).toBe(403);
+    expect(res.status).not.toBe(403);
   });
 
   // Proves loadWaiterEvent's eventId — taken from the verified JWT, never the
@@ -230,7 +236,7 @@ describe('waiter tables — remove an item', () => {
   // called directly. A 401 here would mean the request never reached
   // requireWaiterPermission at all — see the gate-removal check in the
   // report for how this was verified to actually depend on the middleware.
-  it('403s a waiter token missing MANAGE_TABLES — authenticated, but not authorised', async () => {
+  it('serves an emptied token claim — the ROW carries the role floor', async () => {
     const { token } = await seedFloor([]);
     const someTableId = new mongoose.Types.ObjectId().toString();
     const someLineId = new mongoose.Types.ObjectId().toString();
@@ -238,7 +244,7 @@ describe('waiter tables — remove an item', () => {
     const res = await request(app).delete(`/api/waiter/tables/${someTableId}/items/${someLineId}`)
       .set('Authorization', `Bearer ${token}`);
 
-    expect(res.status).toBe(403);
+    expect(res.status).not.toBe(403);
   });
 });
 
@@ -265,14 +271,14 @@ describe('waiter tables — void a table', () => {
   // called directly. A 401 here would mean the request never reached
   // requireWaiterPermission at all — see the gate-removal check in the
   // report for how this was verified to actually depend on the middleware.
-  it('403s a waiter token missing MANAGE_TABLES — authenticated, but not authorised', async () => {
+  it('serves an emptied token claim — the ROW carries the role floor', async () => {
     const { token } = await seedFloor([]);
     const someTableId = new mongoose.Types.ObjectId().toString();
 
     const res = await request(app).post(`/api/waiter/tables/${someTableId}/void`)
       .set('Authorization', `Bearer ${token}`).send({ reason: 'walked out' });
 
-    expect(res.status).toBe(403);
+    expect(res.status).not.toBe(403);
   });
 });
 
@@ -399,8 +405,10 @@ describe('waiter tables — revocation and event lifecycle', () => {
     const res = await request(app).post(`/api/waiter/tables/${tableId}/settle`)
       .set('Authorization', `Bearer ${token}`).send({ bandUid: '04a22b1c', clientTxnId: 's1' });
 
-    expect(res.status).toBe(403);
-    expect(res.body.message).toMatch(/not assigned to this event/i);
+    // Refused at AUTHENTICATION now, not at event scope: authenticateWaiter
+    // re-reads the row before any handler runs.
+    expect(res.status).toBe(401);
+    expect(res.body.message).toMatch(/deactivated/i);
     await nothingMoved(tableId);
   });
 
@@ -411,8 +419,10 @@ describe('waiter tables — revocation and event lifecycle', () => {
     const res = await request(app).post(`/api/waiter/tables/${tableId}/settle`)
       .set('Authorization', `Bearer ${token}`).send({ bandUid: '04a22b1c', clientTxnId: 's1' });
 
-    expect(res.status).toBe(403);
-    expect(res.body.message).toMatch(/not assigned to this event/i);
+    // Refused at AUTHENTICATION now, not at event scope: authenticateWaiter
+    // re-reads the row before any handler runs.
+    expect(res.status).toBe(401);
+    expect(res.body.message).toMatch(/deactivated/i);
     await nothingMoved(tableId);
   });
 

@@ -217,14 +217,17 @@ describe('the waiter product grid — authorisation, revocation and lifecycle', 
     expect((await get(cashier)).status).toBe(401);
   });
 
-  it('403s a waiter token missing VIEW_EVENTS', async () => {
+  it('reads the permission set off the ROW, so an emptied token claim still serves', async () => {
+    // authenticateWaiter re-derives permissions from the waiter row on every
+    // request; the token's claim is the POS's rendering copy and authorizes
+    // nothing. VIEW_EVENTS is part of the role floor, so a live waiter holds
+    // it however stale the claim in their hand.
     const { token } = await seedFloor([]);
     const res = await get(token);
-    expect(res.status).toBe(403);
-    expect(res.body.message).toBe(`Permission required: ${WaiterPermission.VIEW_EVENTS}`);
+    expect(res.status).toBe(200);
   });
 
-  it('403s a waiter deactivated AFTER they logged in', async () => {
+  it('401s a waiter deactivated AFTER they logged in', async () => {
     const { eventId, token, waiterId } = await seedFloor();
     const bar = await seedStall(eventId, 'Main Bar');
     await allocate(eventId, bar, await seedProduct(eventId, 'Castle Lite 330ml'), 12);
@@ -234,12 +237,15 @@ describe('the waiter product grid — authorisation, revocation and lifecycle', 
 
     const res = await get(token);
 
-    expect(res.status).toBe(403);
-    expect(res.body.message).toMatch(/not assigned to this event/i);
+    // Refused at AUTHENTICATION now, not at event scope: authenticateWaiter
+    // re-reads the row before any handler runs, so a fired waiter is signed
+    // out rather than merely told they are off this event.
+    expect(res.status).toBe(401);
+    expect(res.body.message).toMatch(/deactivated/i);
     expect(res.body.data).toBeUndefined();
   });
 
-  it('403s a waiter whose row was deleted after login', async () => {
+  it('401s a waiter whose row was deleted after login', async () => {
     const { eventId, token, waiterId } = await seedFloor();
     const bar = await seedStall(eventId, 'Main Bar');
     await allocate(eventId, bar, await seedProduct(eventId, 'Castle Lite 330ml'), 12);
@@ -247,8 +253,8 @@ describe('the waiter product grid — authorisation, revocation and lifecycle', 
 
     const res = await get(token);
 
-    expect(res.status).toBe(403);
-    expect(res.body.message).toMatch(/not assigned to this event/i);
+    expect(res.status).toBe(401);
+    expect(res.body.message).toMatch(/deactivated/i);
   });
 
   it('400s once the event is no longer published', async () => {

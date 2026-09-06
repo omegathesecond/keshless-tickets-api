@@ -1,8 +1,8 @@
 // api/src/services/waiterAuth.service.ts
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { Waiter } from '@models/waiter.model';
-import { WAITER_PERMISSIONS, WaiterToken } from '@interfaces/waiter.interface';
-import { grantedWaiterPermissions } from '@interfaces/operatorGrant.interface';
+import { WaiterToken } from '@interfaces/waiter.interface';
+import { deriveWaiterPermissions } from '@interfaces/operatorGrant.interface';
 import { JWT_SECRET } from '@config/jwt.config';
 import { normalizeLoginCode } from '@utils/operatorCredentials.util';
 import { recordFailedPinAttempt, clearPinLockout } from '@utils/pinLockout.util';
@@ -44,8 +44,9 @@ export class WaiterAuthService {
       userType: 'waiter',
       waiterId: (waiter._id as any).toString(),
       role: 'waiter',
-      // Role set is the floor; per-person grants (e.g. settling) add to it.
-      permissions: [...WAITER_PERMISSIONS, ...grantedWaiterPermissions(waiter.grants)],
+      // The POS's rendering copy only — authenticateWaiter re-derives this
+      // from the row on every request, and THAT is what authorizes.
+      permissions: deriveWaiterPermissions(waiter.grants),
       isSuperAdmin,
       fullName: waiter.fullName,
     };

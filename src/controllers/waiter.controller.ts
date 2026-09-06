@@ -51,11 +51,17 @@ export class WaiterController {
   static async getEvents(req: Request, res: Response): Promise<any> {
     const event = await loadWaiterEvent(req, res);
     if (!event) return;
+    const waiter = (req as any).waiter as WaiterToken;
     return ApiResponseUtil.success(res, {
       events: [{
         id: String(event._id), name: event.name, venue: event.venue,
         eventDate: event.eventDate,
       }],
+      // The LIVE set, re-derived from the row by authenticateWaiter — not the
+      // claim the handheld's 7-day token carries. This is what lets the floor
+      // screen show a Settle button the moment the organizer grants settling,
+      // instead of waiting for the waiter to sign out and back in.
+      permissions: waiter.permissions,
     });
   }
 
