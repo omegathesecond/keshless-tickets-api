@@ -9,6 +9,7 @@ import {
   TableService, TableLabelTakenError, TableShortfallError,
   TableAlreadySettledError, TableWalletNotFoundError,
   TableChangedDuringSettlementError, TableIdempotencyMismatchError,
+  TableFulfilmentNotFoundError, TableFulfilmentStateError,
 } from '@services/table.service';
 import { StockDeclinedError } from '@services/stock.service';
 import { PosCatalogService } from '@services/posCatalog.service';
@@ -115,9 +116,43 @@ export class WaiterController {
   static async listTables(req: Request, res: Response): Promise<any> {
     const event = await loadWaiterEvent(req, res);
     if (!event) return;
-    const status = typeof req.query['status'] === 'string' ? req.query['status'] : undefined;
-    const tables = await TableService.list(String(event._id), status);
+    const str = (k: string) => (typeof req.query[k] === 'string' ? (req.query[k] as string) : undefined);
+    const tables = await TableService.list(String(event._id), {
+      status: str('status'), tab: str('tab'), q: str('q'),
+    });
     return ApiResponseUtil.success(res, { tables });
+  }
+
+  /**
+   * POST /api/waiter/tables/:id/stalls/:merchantId/accept — the waiter's half
+   * of the handshake: this stall's stock is in their hands.
+   *
+   * Gated on MANAGE_TABLES, not SETTLE_TABLES: taking delivery of a round is
+   * the serving job, and a waiter who may not touch the money still has to be
+   * able to collect the drinks they carried the order for.
+   */
+  static async acceptStall(req: Request, res: Response): Promise<any> {
+    const event = await loadWaiterEvent(req, res);
+    if (!event) return;
+    const waiter = (req as any).waiter as WaiterToken;
+    const tableId = String(req.params['id']);
+    const merchantId = String(req.params['merchantId']);
+    // Shape-checked before either is cast: an unguarded ObjectId cast throws a
+    // CastError out of a handler Express 4 does not await, so the request
+    // hangs instead of answering — the same trap loadWaiterEvent documents.
+    if (!HEX24.test(tableId) || !HEX24.test(merchantId)) {
+      return ApiResponseUtil.notFound(res, 'no handover for this stall on that table');
+    }
+    try {
+      const table = await TableService.accept({
+        tableId, eventId: String(event._id), merchantId, acceptedBy: waiter.waiterId,
+      });
+      return ApiResponseUtil.success(res, table);
+    } catch (e) {
+      if (e instanceof TableFulfilmentNotFoundError) return ApiResponseUtil.notFound(res, e.message);
+      if (e instanceof TableFulfilmentStateError) return ApiResponseUtil.error(res, e.message, 409);
+      throw e;
+    }
   }
 
   /** POST /api/waiter/tables/:id/items — add an item from a stall, moving its stock. */

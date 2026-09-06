@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import { Table } from '@models/table.model';
-import { ITable, ITableLine, TableStatus } from '@interfaces/table.interface';
+import {
+  ITable, ITableLine, TableStatus, ITableFulfilment, TableFulfilmentStatus,
+} from '@interfaces/table.interface';
 import { Merchant } from '@models/merchant.model';
 import { Product } from '@models/product.model';
 import { ProductStock } from '@models/productStock.model';
@@ -117,6 +119,38 @@ class ReplayedSettlement extends Error {
   }
 }
 
+/**
+ * This stall has no handover on this table — it has nothing on the tab, the
+ * table does not exist at this event, or the tab was never settled (rows are
+ * written by settlement, so an open table has none). Mapped to 404.
+ *
+ * Deliberately the SAME refusal for all three: a stall operator must not be
+ * able to probe which table ids exist at an event, or which of them another
+ * stall is serving, by reading the difference between the messages.
+ */
+export class TableFulfilmentNotFoundError extends Error {
+  constructor() {
+    super('no handover for this stall on that table');
+    this.name = 'TableFulfilmentNotFoundError';
+  }
+}
+
+/**
+ * The handover is real but not where the caller thought: accepting stock the
+ * stall has not released, or releasing (or accepting) twice. Mapped to 409.
+ *
+ * Named separately from the not-found case because the operator's next move
+ * differs — one means "check what you tapped", the other means "somebody
+ * already did this". The message carries the actual status so a screen that
+ * has gone stale can just re-render.
+ */
+export class TableFulfilmentStateError extends Error {
+  constructor(public readonly status: TableFulfilmentStatus, expected: TableFulfilmentStatus) {
+    super(`that handover is ${status}, not ${expected}`);
+    this.name = 'TableFulfilmentStateError';
+  }
+}
+
 /** What one stall is owed off a table, and the lines it is owed for. */
 interface StallShare {
   merchantId: string;
@@ -134,6 +168,105 @@ export interface TableSettlement {
   table: ITable;
   charges: IMerchantCharge[];
   walletBalance: number;
+}
+
+/**
+ * One table as ONE stall may see it: its own lines, its own money, its own
+ * handover row. Not an ITable — the redaction is the point, and returning the
+ * real shape would invite a caller to treat it as the whole table.
+ */
+export interface StallTableView {
+  _id: string;
+  label: string;
+  status: TableStatus;
+  items: ITableLine[];
+  /** This stall's lines only — NOT what the guest paid for the whole tab. */
+  subtotal: number;
+  fulfilment: ITableFulfilment;
+  settledAt?: Date;
+  createdAt: Date;
+}
+
+/**
+ * The waiter's New/Paid/Collected view, as a query fragment.
+ *
+ * Derived rather than stored, so a tab can never drift out of step with the
+ * rows it summarises. Collected is expressed as "no row is still outstanding"
+ * instead of "every row is collected" because Mongo has no all-elements-match
+ * operator — and the negative form gives the right answer for a table settled
+ * before fulfilment was tracked, which has no rows and nothing outstanding.
+ */
+function tabFilter(tab?: string): Record<string, unknown> {
+  switch (tab) {
+    case 'new':
+      return { status: 'open' };
+    case 'paid':
+      return { status: 'settled', fulfilment: { $elemMatch: { status: { $ne: 'collected' } } } };
+    case 'collected':
+      return { status: 'settled', fulfilment: { $not: { $elemMatch: { status: { $ne: 'collected' } } } } };
+    default:
+      return {};
+  }
+}
+
+/**
+ * Substring search over the label, which is where both "table 12" and "table
+ * Mza" live — one field answers "search table / name" because labels already
+ * carry both.
+ *
+ * Escaped before it becomes a regex: an unescaped label containing `.` or `(`
+ * would either match everything or throw, and a search box is the one place a
+ * user's raw text reaches a query builder.
+ */
+function labelFilter(q?: string): Record<string, unknown> {
+  const term = (q ?? '').trim();
+  if (!term) return {};
+  return { label: { $regex: term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } };
+}
+
+/**
+ * Move ONE stall's handover from one status to the next, atomically.
+ *
+ * The expected `from` status is in the FILTER, not checked and then written:
+ * two operators tapping Hand out together must produce one transition and one
+ * refusal, not two writes racing over the same stamp.
+ *
+ * A miss is then diagnosed with a second read, because "no such row" and "the
+ * row has already moved" send the operator to different places — and only the
+ * second is worth telling them the current status of.
+ */
+async function advanceFulfilment(params: {
+  tableId: string; eventId: string; merchantId: string;
+  from: TableFulfilmentStatus; to: TableFulfilmentStatus;
+  stamp: Record<string, unknown>;
+}): Promise<ITable> {
+  const { tableId, eventId, merchantId, from, to, stamp } = params;
+  const tableObjId = new mongoose.Types.ObjectId(tableId);
+  const eventObjId = new mongoose.Types.ObjectId(eventId);
+  const merchantObjId = new mongoose.Types.ObjectId(merchantId);
+
+  const set: Record<string, unknown> = { 'fulfilment.$[row].status': to };
+  for (const [k, v] of Object.entries(stamp)) set[`fulfilment.$[row].${k}`] = v;
+
+  const updated = await Table.findOneAndUpdate(
+    {
+      _id: tableObjId, eventId: eventObjId, status: 'settled',
+      fulfilment: { $elemMatch: { merchantId: merchantObjId, status: from } },
+    },
+    { $set: set },
+    {
+      new: true,
+      arrayFilters: [{ 'row.merchantId': merchantObjId, 'row.status': from }],
+    },
+  );
+  if (updated) return updated;
+
+  // eventId stays in this lookup too: a table at another event must read
+  // exactly like a missing one, or the error itself confirms it exists.
+  const current = await Table.findOne({ _id: tableObjId, eventId: eventObjId });
+  const row = current?.fulfilment.find((f) => String(f.merchantId) === merchantId);
+  if (!row) throw new TableFulfilmentNotFoundError();
+  throw new TableFulfilmentStateError(row.status, from);
 }
 
 export class TableService {
@@ -156,11 +289,100 @@ export class TableService {
     }
   }
 
-  static async list(eventId: string, status?: string): Promise<ITable[]> {
+  /**
+   * The floor's table list.
+   *
+   * `status` selects the raw table status; `tab` selects the waiter's
+   * New/Paid/Collected view, which is a PROJECTION over status plus the
+   * fulfilment rows rather than a stored field — see tabFilter. They are
+   * different questions, so both are offered rather than one overloaded.
+   */
+  static async list(
+    eventId: string,
+    opts: { status?: string; tab?: string; q?: string } = {},
+  ): Promise<ITable[]> {
+    const { status, tab, q } = opts;
     return Table.find({
       eventId: new mongoose.Types.ObjectId(eventId),
       ...(status ? { status } : {}),
+      ...tabFilter(tab),
+      ...labelFilter(q),
     }).sort({ createdAt: -1 }).limit(200);
+  }
+
+  /**
+   * The tables one STALL is serving, carrying only that stall's own lines.
+   *
+   * A stall must never learn what another stall poured or what the guest paid
+   * overall, so `items` is filtered to the caller's own merchantId and the
+   * subtotal recomputed from that subset — the whole-tab `subtotal` on the
+   * stored document would be a leak. Returned as plain objects, not
+   * documents: these are a projection, and handing back something that looks
+   * saveable invites a caller to save the redacted version over the real one.
+   */
+  static async listForStall(params: {
+    eventId: string; merchantId: string; status?: TableFulfilmentStatus;
+  }): Promise<StallTableView[]> {
+    const { eventId, merchantId, status } = params;
+    const merchantObjId = new mongoose.Types.ObjectId(merchantId);
+
+    const tables = await Table.find({
+      eventId: new mongoose.Types.ObjectId(eventId),
+      // $elemMatch, not dotted paths: {'fulfilment.merchantId': x,
+      // 'fulfilment.status': y} matches a table where SOME row names the
+      // stall and SOME (possibly other) row has the status — so the Bar would
+      // see a table the moment the Kitchen handed food over.
+      fulfilment: { $elemMatch: { merchantId: merchantObjId, ...(status ? { status } : {}) } },
+    }).sort({ settledAt: -1, createdAt: -1 }).limit(200).lean<ITable[]>();
+
+    return tables.map((t) => {
+      const mine = t.items.filter((i) => String(i.merchantId) === merchantId);
+      const row = t.fulfilment.find((f) => String(f.merchantId) === merchantId)!;
+      return {
+        _id: String(t._id),
+        label: t.label,
+        status: t.status,
+        items: mine,
+        subtotal: mine.reduce((s, i) => s + i.unitPrice * i.qty, 0),
+        fulfilment: row,
+        settledAt: t.settledAt,
+        createdAt: t.createdAt,
+      };
+    });
+  }
+
+  /**
+   * The stall's half of the handshake: the stock has left the counter.
+   *
+   * Guarded on the row being exactly 'paid', so a double-tap is refused
+   * rather than re-stamping handedOutBy with whoever tapped last — the point
+   * of the stamp is that it names the person who actually released it.
+   */
+  static async handOut(params: {
+    tableId: string; eventId: string; merchantId: string; handedOutBy: string;
+  }): Promise<ITable> {
+    return advanceFulfilment({
+      ...params,
+      from: 'paid', to: 'handed_out',
+      stamp: { handedOutAt: new Date(), handedOutBy: params.handedOutBy },
+    });
+  }
+
+  /**
+   * The waiter's half: the stock is in their hands.
+   *
+   * Guarded on 'handed_out', so a waiter cannot mark collected something the
+   * stall never released. Leaves the stall's own stamp untouched — a disputed
+   * handover is only worth anything with both halves on it.
+   */
+  static async accept(params: {
+    tableId: string; eventId: string; merchantId: string; acceptedBy: string;
+  }): Promise<ITable> {
+    return advanceFulfilment({
+      ...params,
+      from: 'handed_out', to: 'collected',
+      stamp: { acceptedAt: new Date(), acceptedBy: params.acceptedBy },
+    });
   }
 
   /**
@@ -450,7 +672,19 @@ export class TableService {
             revision: table.revision,
             subtotal: table.subtotal, items: { $size: table.items.length },
           },
-          { $set: { status: 'settled', settledAt: new Date(), settledBy, walletId: wallet._id, settleTxnId: clientTxnId } },
+          {
+            $set: {
+              status: 'settled', settledAt: new Date(), settledBy,
+              walletId: wallet._id, settleTxnId: clientTxnId,
+              // The handover opens here, from the SAME per-stall split that
+              // prices the charges below — so the stalls owed money and the
+              // stalls owing stock are the same list by construction, and
+              // land in the same transaction as the money. Written whole
+              // rather than appended: the guard above has already proved this
+              // table is 'open', which is the only state with no rows.
+              fulfilment: stalls.map((s) => ({ merchantId: s.merchantId, status: 'paid' })),
+            },
+          },
           { new: true, session },
         );
         if (!settled) {

@@ -40,3 +40,48 @@ describe('a table', () => {
     })).rejects.toThrow(/integer/i);
   });
 });
+
+describe('a table\'s fulfilment rows', () => {
+  const stall = () => new mongoose.Types.ObjectId();
+
+  it('defaults to none — fulfilment begins at settlement, not when a line lands', async () => {
+    const table = await Table.create(open('20'));
+    expect(table.fulfilment).toEqual([]);
+  });
+
+  it('holds one row per stall, each starting at paid', async () => {
+    const [bar, kitchen] = [stall(), stall()];
+    const table = await Table.create({
+      ...open('21'),
+      fulfilment: [{ merchantId: bar }, { merchantId: kitchen }],
+    });
+    expect(table.fulfilment.map((f) => f.status)).toEqual(['paid', 'paid']);
+    expect(table.fulfilment.map((f) => String(f.merchantId))).toEqual([String(bar), String(kitchen)]);
+  });
+
+  it('refuses a status outside the handover sequence', async () => {
+    await expect(Table.create({
+      ...open('22'),
+      fulfilment: [{ merchantId: stall(), status: 'in_transit' }],
+    })).rejects.toThrow(/is not a valid enum value|validation/i);
+  });
+
+  it('carries both halves of the handshake — who released it and who took it', async () => {
+    const table = await Table.create({
+      ...open('23'),
+      fulfilment: [{
+        merchantId: stall(), status: 'collected',
+        handedOutAt: new Date(), handedOutBy: 'op-1',
+        acceptedAt: new Date(), acceptedBy: 'waiter-1',
+      }],
+    });
+    const row = table.fulfilment[0]!;
+    expect(row.handedOutBy).toBe('op-1');
+    expect(row.acceptedBy).toBe('waiter-1');
+  });
+
+  it('keys a row by its stall, so a row needs no id of its own', async () => {
+    const table = await Table.create({ ...open('24'), fulfilment: [{ merchantId: stall() }] });
+    expect((table.fulfilment[0] as any)._id).toBeUndefined();
+  });
+});

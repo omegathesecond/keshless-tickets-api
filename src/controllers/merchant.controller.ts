@@ -19,6 +19,14 @@ import { chargeSchema } from '@validators/merchant.validator';
 import { posCountSchema, posStockAdjustSchema, posTransferSchema } from '@validators/stock.validator';
 import { toBaseUnits } from '@utils/stockUnits.util';
 import { StockMovementReason } from '@interfaces/stock.interface';
+import {
+  TableService, TableFulfilmentNotFoundError, TableFulfilmentStateError,
+} from '@services/table.service';
+import { TableFulfilmentStatus } from '@interfaces/table.interface';
+import { HEX24 } from '@utils/controllerHelpers.util';
+
+/** The statuses a stall may filter its table feed by — see MerchantController.tables. */
+const FULFILMENT_STATUSES: TableFulfilmentStatus[] = ['paid', 'handed_out', 'collected'];
 import { MerchantToken } from '@interfaces/merchant.interface';
 
 /** Human-facing message per WalletDeclinedError reason, for the 402 envelope. */
@@ -153,6 +161,64 @@ export class MerchantController {
       const stock = await PosCatalogService.forMerchant(merchantId, eventId);
       return ApiResponseUtil.success(res, { stock });
     } catch (e: any) { return ApiResponseUtil.error(res, e?.message || 'Failed to load stock', 500); }
+  }
+
+  /**
+   * GET /api/merchant/tables — the tables THIS stall owes stock to.
+   *
+   * The counter-side view of a waiter's tab: the guest has already paid (rows
+   * exist only once a table is settled), and this screen is where the bar or
+   * kitchen sees what to hand over and to whom.
+   *
+   * Scoped to the caller's own stall by TableService.listForStall, which also
+   * strips every other stall's lines and reprices the subtotal from what is
+   * left — a stall must never read what another poured, nor what the guest
+   * paid across the whole tab.
+   */
+  static async tables(req: Request, res: Response): Promise<any> {
+    try {
+      const { merchantId, eventId } = (req as any).merchant as MerchantToken;
+      const raw = req.query['status'];
+      // Whitelisted, not passed through: an unknown value must not silently
+      // widen the query into "every status" on a screen whose whole job is
+      // telling paid-for stock apart from stock already handed over.
+      const status = FULFILMENT_STATUSES.find((s) => s === raw);
+      const tables = await TableService.listForStall({ eventId, merchantId, status });
+      return ApiResponseUtil.success(res, { tables });
+    } catch (e: any) {
+      return ApiResponseUtil.error(res, e?.message || 'Failed to load tables', 500);
+    }
+  }
+
+  /**
+   * POST /api/merchant/tables/:id/hand-out — this stall's half of the
+   * handshake: the stock has left the counter.
+   *
+   * Attributed to the PERSON on the till, not the stall, for the same reason
+   * a charge is: "the bar handed it over" names nobody when a handover is
+   * later disputed.
+   */
+  static async handOutTable(req: Request, res: Response): Promise<any> {
+    const { merchantId, eventId, merchantOperatorId } = (req as any).merchant as MerchantToken;
+    const tableId = String(req.params['id']);
+    // Shape-checked before the cast: an unguarded ObjectId cast throws a
+    // CastError out of a handler Express 4 does not await, hanging the request.
+    if (!HEX24.test(tableId)) {
+      return ApiResponseUtil.notFound(res, 'no handover for this stall on that table');
+    }
+    try {
+      const table = await TableService.handOut({
+        tableId, eventId, merchantId, handedOutBy: merchantOperatorId,
+      });
+      const [view] = await TableService.listForStall({ eventId, merchantId });
+      // The redacted view, never the whole table: the raw document carries
+      // every other stall's lines.
+      return ApiResponseUtil.success(res, view ?? { _id: String(table._id), label: table.label });
+    } catch (e) {
+      if (e instanceof TableFulfilmentNotFoundError) return ApiResponseUtil.notFound(res, e.message);
+      if (e instanceof TableFulfilmentStateError) return ApiResponseUtil.error(res, e.message, 409);
+      throw e;
+    }
   }
 
   /**

@@ -3,6 +3,39 @@ import { Document, Types } from 'mongoose';
 export type TableStatus = 'open' | 'settled' | 'voided';
 
 /**
+ * How far one STALL has got with handing its share of a table over.
+ *
+ * Separate from TableStatus because they answer different questions. A table
+ * is settled once, for the whole tab; a handover happens per counter, and a
+ * table with drinks and food is two of them. Collapsing the two would let the
+ * Bar close out food it never touched.
+ */
+export type TableFulfilmentStatus = 'paid' | 'handed_out' | 'collected';
+
+/**
+ * One stall's handover on one table.
+ *
+ * Written by settlement — one row per stall on the tab, at 'paid' — and
+ * advanced by the two halves of the handshake: the stall releases the stock,
+ * the waiter accepts it. Both are required. Either alone would leave a
+ * disputed handover with one person's word on it; together they leave two
+ * timestamps and two actor ids.
+ *
+ * No `_id`: merchantId is the natural key. A table cannot have two rows for
+ * one stall, and every update addresses a row by the stall it belongs to.
+ */
+export interface ITableFulfilment {
+  merchantId: Types.ObjectId;
+  status: TableFulfilmentStatus;
+  /** When the stall released the stock, and which operator did it. */
+  handedOutAt?: Date;
+  handedOutBy?: string;
+  /** When the waiter confirmed receipt, and which waiter. */
+  acceptedAt?: Date;
+  acceptedBy?: string;
+}
+
+/**
  * One line on a table. Name and unitPrice are SNAPSHOTTED at add time, the way
  * MerchantCharge.items already does: a price change at the stall must never
  * reprice a drink somebody already drank.
@@ -36,6 +69,12 @@ export interface ITable extends Document {
    * would be right and the money would go to the wrong stall.
    */
   revision: number;
+  /**
+   * One row per stall on the tab, written by settlement. Empty while the
+   * table is open, and on any table settled before fulfilment was tracked —
+   * which reads as "nothing outstanding", the right answer for both.
+   */
+  fulfilment: ITableFulfilment[];
   settledAt?: Date;
   settledBy?: string;
   walletId?: Types.ObjectId;

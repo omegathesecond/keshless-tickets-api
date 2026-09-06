@@ -33,6 +33,20 @@ router.post(
   MerchantController.recordCount,
 );
 
+// CHARGE, not MANAGE_STOCK: handing a paid round over the counter is the
+// selling job — the same person on the same till — not stock administration.
+router.get(
+  '/tables',
+  requireMerchantPermission(MerchantPermission.CHARGE),
+  MerchantController.tables,
+);
+
+router.post(
+  '/tables/:id/hand-out',
+  requireMerchantPermission(MerchantPermission.CHARGE),
+  MerchantController.handOutTable,
+);
+
 router.get(
   '/stalls',
   requireMerchantPermission(MerchantPermission.MANAGE_STOCK),

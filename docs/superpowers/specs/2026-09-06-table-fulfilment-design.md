@@ -50,14 +50,22 @@ the table:
 
 ```ts
 fulfilment: [{
-  merchantId: ObjectId,      // the stall
-  status: 'new' | 'paid' | 'handed_out' | 'collected',
+  merchantId: ObjectId,      // the stall — the natural key, so no _id
+  status: 'paid' | 'handed_out' | 'collected',
   handedOutAt?: Date,
   handedOutBy?: string,      // merchant operator id
   acceptedAt?: Date,
   acceptedBy?: string,       // waiter id
 }]
 ```
+
+Rows are created **by settlement**, from the same per-stall split that prices
+the `MerchantCharge`s, and there are none before it. An earlier draft had
+`addItem` open a row at `new` and `removeItem` close it, but nothing ever read
+a `new` row: the waiter's New tab is `status === 'open'`, and the stall's feed
+starts at `paid`. Maintaining rows through every line change bought a second
+thing to keep in step with `items` and no behaviour — so fulfilment begins
+where it means something, at the money.
 
 Embedded rather than a separate `StallTicket` collection: a fulfilment row is
 never read apart from its table, and embedding lets settlement flip every row
@@ -68,13 +76,11 @@ queries at the cost of a second write in the money path.
 ### The state machine
 
 ```
-new ──settle──> paid ──stall hands out──> handed_out ──waiter accepts──> collected
+(no row) ──settle──> paid ──stall hands out──> handed_out ──waiter accepts──> collected
 ```
 
-- `addItem` creates the stall's row at `new` if it is the first line from that
-  stall. `removeItem` deletes the row when its last line goes.
-- `settle` flips every row `new → paid`, in the same transaction and under the
-  same `revision` guard as the money.
+- `settle` writes one row per stall at `paid`, in the transaction that moves
+  the money and under the `revision` guard already protecting it
 - the stall marks `paid → handed_out`
 - the waiter accepts `handed_out → collected`
 
@@ -96,6 +102,9 @@ The waiter's three tabs are a projection, not a stored field:
 | New | `status === 'open'` |
 | Paid | `status === 'settled'` and at least one row is not `collected` |
 | Collected | `status === 'settled'` and every row is `collected` |
+
+A table settled before this shipped carries no rows, so it reads as
+Collected — correct, in that nothing about it is outstanding.
 
 ### API
 

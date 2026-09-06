@@ -17,6 +17,9 @@ router.get('/tables', requireWaiterPermission(WaiterPermission.MANAGE_TABLES), W
 router.post('/tables/:id/items', requireWaiterPermission(WaiterPermission.MANAGE_TABLES), WaiterController.addItem);
 router.delete('/tables/:id/items/:lineId', requireWaiterPermission(WaiterPermission.MANAGE_TABLES), WaiterController.removeItem);
 router.post('/tables/:id/void', requireWaiterPermission(WaiterPermission.MANAGE_TABLES), WaiterController.voidTable);
+// Taking delivery of a round is the SERVING job, so it rides on MANAGE_TABLES
+// — a waiter barred from the money still has to be able to collect the drinks.
+router.post('/tables/:id/stalls/:merchantId/accept', requireWaiterPermission(WaiterPermission.MANAGE_TABLES), WaiterController.acceptStall);
 // SETTLE_TABLES, deliberately NOT MANAGE_TABLES: serving a table and taking
 // money for it are different jobs, and the money one is a separate per-person
 // grant (see WAITER_PERMISSIONS, which omits it).
