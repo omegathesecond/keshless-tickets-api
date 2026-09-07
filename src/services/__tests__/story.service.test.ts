@@ -172,9 +172,19 @@ describe('story.service', () => {
       const g = groups[0]!;
       expect(g.isOwn).toBe(false);
       expect(g.seen).toBe(false);
-      expect(g.author).toEqual({ type: 'buyer', id: String(author._id), name: 'Author Buyer', avatarUrl: null });
+      expect(g.author).toEqual({ type: 'buyer', id: String(author._id), name: 'Author Buyer', username: null, avatarUrl: null });
       expect(g.items).toHaveLength(1);
       expect(g.items[0]!.mediaUrl).toContain('.jpg');
+    });
+
+    it('carries the author\'s username so the client can link to their profile', async () => {
+      const viewer: IBuyer = await seedBuyer('+26878400103');
+      const author = await seedBuyer('+26878400104', { name: 'Author Buyer', username: 'authorbuyer' });
+      await FollowService.follow(viewer, 'buyer', String(author._id));
+      await seedReadyStory('buyer', String(author._id));
+
+      const groups = await listForViewer({ type: 'buyer', id: String(viewer._id) });
+      expect(groups[0]!.author.username).toBe('authorbuyer');
     });
 
     it('includes a followed organizer (vendor) story, author.type=organizer', async () => {
@@ -185,7 +195,7 @@ describe('story.service', () => {
 
       const groups = await listForViewer({ type: 'buyer', id: String(viewer._id) });
       expect(groups).toHaveLength(1);
-      expect(groups[0]!.author).toEqual({ type: 'organizer', id: String(vendor._id), name: 'Acme Events', avatarUrl: null });
+      expect(groups[0]!.author).toEqual({ type: 'organizer', id: String(vendor._id), name: 'Acme Events', username: null, avatarUrl: null });
     });
 
     it('includes a story from a NON-followed, non-blocked author — Stories are visible to everyone', async () => {

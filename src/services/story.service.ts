@@ -351,7 +351,12 @@ export interface StoryItemDto {
 }
 
 export interface StoryGroupDto {
-  author: { type: 'buyer' | 'organizer'; id: string; name: string | null; avatarUrl: string | null };
+  // `username` is only ever set for a buyer author (an organizer's profile
+  // route uses vendorId, not a handle — see StoryViewer's authorHref) but
+  // lives on the shared shape like the other author DTOs above (StoryViewerDto,
+  // StoryLikerDto) so the client can build a profile link straight off the
+  // author it already has, without a second round-trip.
+  author: { type: 'buyer' | 'organizer'; id: string; name: string | null; username: string | null; avatarUrl: string | null };
   items: StoryItemDto[];
   seen: boolean;
   isOwn: boolean;
@@ -437,8 +442,8 @@ export async function listForViewer(actor: SocialActor): Promise<StoryGroupDto[]
     if (!group) {
       const isOwn = isOwnStory;
       const author = s.authorType === 'vendor'
-        ? { type: 'organizer' as const, id: String(s.authorId), name: vMap.get(String(s.authorId))?.businessName ?? 'Organizer', avatarUrl: vMap.get(String(s.authorId))?.logoUrl ?? null }
-        : { type: 'buyer' as const, id: String(s.authorId), name: bMap.get(String(s.authorId))?.name ?? bMap.get(String(s.authorId))?.username ?? null, avatarUrl: bMap.get(String(s.authorId))?.avatarUrl ?? null };
+        ? { type: 'organizer' as const, id: String(s.authorId), name: vMap.get(String(s.authorId))?.businessName ?? 'Organizer', username: null, avatarUrl: vMap.get(String(s.authorId))?.logoUrl ?? null }
+        : { type: 'buyer' as const, id: String(s.authorId), name: bMap.get(String(s.authorId))?.name ?? bMap.get(String(s.authorId))?.username ?? null, username: bMap.get(String(s.authorId))?.username ?? null, avatarUrl: bMap.get(String(s.authorId))?.avatarUrl ?? null };
       group = { author, items: [], seen: true, isOwn, latestCreatedAt: 0 };
       groups.set(key, group);
     }
