@@ -116,6 +116,56 @@ describe('feed.service getFeed', () => {
     expect(slide!.type).toBe('update');
   });
 
+  it('following tab includes an OLD post from a followed author alongside recent ones (diversify §3)', async () => {
+    const vendor = await Vendor.create({ businessName: 'Old Content Org', password: 'password123', slug: 'old-content-org' });
+    const buyer = await Buyer.create({ phone: '+26878422613', password: 'password123' });
+    await Follow.create({ followerId: buyer._id, targetType: 'organizer', targetId: vendor._id });
+
+    const oldUpdate = await Update.create({
+      authorType: 'vendor', authorId: vendor._id, kind: 'image', caption: 'old',
+      media: [{ rawKey: 'k', status: 'ready', image: { url: 'u', width: 1, height: 1 } }],
+    });
+    await Update.updateOne({ _id: oldUpdate._id }, { $set: { createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 90) } });
+    for (let i = 0; i < 5; i++) {
+      await Update.create({
+        authorType: 'vendor', authorId: vendor._id, kind: 'image', caption: 'recent' + i,
+        media: [{ rawKey: 'k', status: 'ready', image: { url: 'u', width: 1, height: 1 } }],
+      });
+    }
+
+    // A random $sample draw can't be asserted deterministically to surface the
+    // old post on any single call, so page through until the pool is
+    // exhausted and confirm the old post was reachable at all — a plain
+    // recency sort could NEVER have returned it while 5 newer posts exist.
+    let cursor: string | undefined;
+    let found = false;
+    for (let i = 0; i < 10 && !found; i++) {
+      const page = await getFeed({ tab: 'following', actor: { type: 'buyer', id: String(buyer._id) }, limit: 2, cursor });
+      if (page.items.some((it) => it.id === String(oldUpdate._id))) found = true;
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    expect(found).toBe(true);
+  });
+
+  it('following tab never repeats an update id across pages of the same random walk', async () => {
+    const vendor = await Vendor.create({ businessName: 'Paging Org', password: 'password123', slug: 'paging-org' });
+    const buyer = await Buyer.create({ phone: '+26878422613', password: 'password123' });
+    await Follow.create({ followerId: buyer._id, targetType: 'organizer', targetId: vendor._id });
+    for (let i = 0; i < 8; i++) {
+      await Update.create({
+        authorType: 'vendor', authorId: vendor._id, kind: 'image', caption: 'p' + i,
+        media: [{ rawKey: 'k', status: 'ready', image: { url: 'u', width: 1, height: 1 } }],
+      });
+    }
+
+    const p1 = await getFeed({ tab: 'following', actor: { type: 'buyer', id: String(buyer._id) }, limit: 4 });
+    expect(p1.nextCursor).toBeTruthy();
+    const p2 = await getFeed({ tab: 'following', actor: { type: 'buyer', id: String(buyer._id) }, limit: 4, cursor: p1.nextCursor! });
+    const p1ids = new Set(p1.items.map((i) => i.id));
+    expect(p2.items.every((i) => !p1ids.has(i.id))).toBe(true);
+  });
+
   it('following tab scopes follow edges by the vendor actor\'s followerType', async () => {
     const viewerVendor = await Vendor.create({ businessName: 'Viewer Vendor', password: 'secret123', slug: 'viewer-vendor' });
     const followedOrg = await Vendor.create({ businessName: 'Followed Org For Vendor', password: 'secret123', slug: 'followed-org-for-vendor' });
