@@ -547,6 +547,14 @@ export class TicketsController {
         return;
       }
 
+      // Carrot Tickets is always the seller for every organizer-created
+      // event — organizers are never asked to choose, and nothing they send
+      // can override it. (createEventSchema also backs the community
+      // self-listing submit path, where 'external' is a legitimate choice,
+      // so the restriction lives here rather than in the shared schema.)
+      value.ticketing = 'carrot';
+      delete value.externalTicketUrl;
+
       const event = await EventService.createEvent({
         vendorId: ticketsUser.vendorId as string,
         isSuperAdmin: ticketsUser.isSuperAdmin || false,
@@ -601,6 +609,13 @@ export class TicketsController {
         ApiResponseUtil.error(res, error.details[0]?.message || 'Validation error', 400);
         return;
       }
+
+      // Carrot Tickets is always the seller for every event — organizers can
+      // never switch an event to external ticketing (or back), so drop any
+      // attempt to change it here rather than in the shared schema (which
+      // also backs the community self-listing submit path).
+      delete value.ticketing;
+      delete value.externalTicketUrl;
 
       const event = await EventService.updateEvent(
         eventId as string,
