@@ -1,5 +1,6 @@
 import { connectTestDb, clearTestDb, disconnectTestDb } from '../../__tests__/helpers/mongo';
 import { ServicesService } from '@services/services.service';
+import { FollowService } from '@services/follow.service';
 import { Vendor } from '@models/vendor.model';
 import { OperatorType, VerificationStatus } from '@interfaces/vendor.interface';
 
@@ -104,5 +105,14 @@ describe('ServicesService.getBusinessProfile', () => {
   it('404s for an events vendor', async () => {
     const v = await Vendor.create({ businessName: 'Org', phoneNumber: '+26876999002', password: 'secret1', operatorType: OperatorType.EVENTS, verificationStatus: VerificationStatus.VERIFIED });
     await expect(ServicesService.getBusinessProfile(String(v._id))).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('reports followingCount as a distinct axis from followerCount', async () => {
+    const v = await mkBiz();
+    const other = await mkBiz({ businessName: 'Other Co' });
+    await FollowService.followAsVendor(String(v._id), 'organizer', String(other._id));
+    const p = await ServicesService.getBusinessProfile(String(v._id));
+    expect(p.followingCount).toBe(1);
+    expect(p.followerCount).toBe(0);
   });
 });
