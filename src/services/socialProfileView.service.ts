@@ -4,7 +4,6 @@ import { Ticket } from '@models/ticket.model';
 import { TicketStatus } from '@interfaces/ticket.interface';
 import { FollowService } from '@services/follow.service';
 import { BlockService } from '@services/block.service';
-import { DmEligibilityService } from '@services/dmEligibility.service';
 import { MeetupService } from '@services/meetup.service';
 import { MeetupStatus } from '@models/meetupRequest.model';
 import type { SocialActor } from '@utils/socialActor.util';
@@ -65,24 +64,17 @@ export class SocialProfileViewService {
       BlockService.isBlockedEitherWay(viewer.id, targetId),
     ]);
 
-    // A vendor viewer talks to a buyer over the brand-thread path, which
-    // bypasses the buyer<->buyer meetup gate entirely — so it never consults
-    // the buyer-only meetup lookups, and canDm collapses to "not blocked".
+    // canDm no longer depends on viewer type or a meetup/follow connection —
+    // any signed-in buyer or vendor may DM a non-blocked buyer.
     let meetupStatus: MeetupStatus | 'none' = 'none';
     let meetupRequestId: string | null = null;
-    let canDm: boolean;
     if (viewer.type === 'buyer') {
-      const [statusMap, dmable] = await Promise.all([
-        MeetupService.outgoingStatusMap(viewer.id, [targetId]),
-        DmEligibilityService.canDm(viewer.id, targetId),
-      ]);
+      const statusMap = await MeetupService.outgoingStatusMap(viewer.id, [targetId]);
       const m = statusMap.get(targetId);
       meetupStatus = m ? m.status : 'none';
       meetupRequestId = m ? m.id : null;
-      canDm = dmable;
-    } else {
-      canDm = !isBlocked;
     }
+    const canDm = !isBlocked;
 
     return {
       id: targetId,

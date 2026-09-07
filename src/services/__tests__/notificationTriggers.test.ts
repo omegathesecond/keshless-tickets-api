@@ -11,7 +11,6 @@ import { Buyer, IBuyer } from '@models/buyer.model';
 import { Vendor } from '@models/vendor.model';
 import { Membership } from '@models/membership.model';
 import { Notification } from '@models/notification.model';
-import { MeetupRequest } from '@models/meetupRequest.model';
 import { CommunityService } from '@services/community.service';
 import { Channel } from '@models/channel.model';
 import { FollowService } from '@services/follow.service';
@@ -93,9 +92,6 @@ describe('notification triggers', () => {
     const friend = await seedBuyer('+26878000002', 'friend_two');
     const outsider = await seedBuyer('+26878000003', 'outsider_three');
     for (const b of [sender, friend]) await Membership.create({ buyerId: b._id, communityId: community._id });
-    // assertCanDm now gates on connection (friend or accepted meetup); shared
-    // community membership alone no longer grants DM eligibility.
-    await MeetupRequest.create({ requesterId: sender._id, targetId: friend._id, status: 'accepted' });
 
     const thread = await DmThreadService.openThread(sender, [String(friend._id)]);
     resetBuckets();

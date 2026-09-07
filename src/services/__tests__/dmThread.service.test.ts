@@ -43,10 +43,10 @@ describe('DmThreadService', () => {
   afterEach(clearTestDb);
   afterAll(disconnectTestDb);
 
-  it('a stranger is refused; a friend and an accepted-meetup partner are allowed', async () => {
+  it('a stranger, a friend, and an accepted-meetup partner are all allowed — no connection required', async () => {
     const a = await seedBuyer('+26878000001');
     const b = await seedBuyer('+26878000002');
-    await expect(DmThreadService.assertCanDm(a, b)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(DmThreadService.assertCanDm(a, b)).resolves.toBeUndefined();
     await befriend(a, b);
     await expect(DmThreadService.assertCanDm(a, b)).resolves.toBeUndefined();
     const c = await seedBuyer('+26878000021');
@@ -54,10 +54,10 @@ describe('DmThreadService', () => {
     await expect(DmThreadService.assertCanDm(a, c)).resolves.toBeUndefined();
   });
 
-  it('friends privacy: a stranger is refused, a friend is allowed', async () => {
+  it('dmPrivacy no longer changes the gate: a "friends"-only stranger is still allowed', async () => {
     const a = await seedBuyer('+26878000001');
     const b = await seedBuyer('+26878000002', 'friends');
-    await expect(DmThreadService.assertCanDm(a, b)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(DmThreadService.assertCanDm(a, b)).resolves.toBeUndefined();
 
     await makeFriends(a, b);
     await expect(DmThreadService.assertCanDm(a, b)).resolves.toBeUndefined();
@@ -106,7 +106,7 @@ describe('DmThreadService', () => {
     expect(await DmThread.countDocuments({})).toBe(1);
   });
 
-  it('groups: 2..9 others ok, 0 or 10+ rejected, creator must pass privacy vs EVERY member', async () => {
+  it('groups: 2..9 others ok, 0 or 10+ rejected, creator must not be blocked by/blocking ANY member', async () => {
     const a = await seedBuyer('+26878000001');
     const others: IBuyer[] = [];
     for (let i = 0; i < 3; i++) others.push(await seedBuyer(`+2687800001${i}`));
@@ -119,9 +119,10 @@ describe('DmThreadService', () => {
 
     await expect(DmThreadService.openThread(a, [])).rejects.toMatchObject({ statusCode: 400 });
 
-    const guarded = await seedBuyer('+26878000099', 'friends'); // friends-only, not a friend
+    const blocked = await seedBuyer('+26878000099');
+    await BlockService.block(a, String(blocked._id));
     await expect(
-      DmThreadService.openThread(a, [...others.map((o) => String(o._id)), String(guarded._id)])
+      DmThreadService.openThread(a, [...others.map((o) => String(o._id)), String(blocked._id)])
     ).rejects.toMatchObject({ statusCode: 403 });
   });
 

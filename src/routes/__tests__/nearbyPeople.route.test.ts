@@ -119,11 +119,11 @@ describe('GET /api/social/nearby/people', () => {
       currentEvent: null,
       meetupStatus: 'none',
       meetupRequestId: null,
-      canDm: false,
+      canDm: true,
     });
   });
 
-  it('nearby people include canDm — true only for a friend or accepted-meetup partner', async () => {
+  it('nearby people include canDm — true for both a connected partner and a stranger (only blocks disable it)', async () => {
     const me = await seedBuyer(PHONE, { username: 'me_one' });
     const partner = await seedBuyer('+26878000028', {
       username: 'partner_g',
@@ -148,7 +148,7 @@ describe('GET /api/social/nearby/people', () => {
     expect(partnerRow).toBeTruthy();
     expect(strangerRow).toBeTruthy();
     expect(partnerRow.canDm).toBe(true);
-    expect(strangerRow.canDm).toBe(false);
+    expect(strangerRow.canDm).toBe(true);
   });
 
   it('excludes a buyer outside radiusKm', async () => {

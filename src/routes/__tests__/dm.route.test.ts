@@ -5,7 +5,6 @@ import { seedPublishedEvent } from '../../__tests__/helpers/fixtures';
 import { signBuyerToken } from '../../__tests__/helpers/auth';
 import { Buyer } from '@models/buyer.model';
 import { Membership } from '@models/membership.model';
-import { MeetupRequest } from '@models/meetupRequest.model';
 import { CommunityService } from '@services/community.service';
 import { BlockService } from '@services/block.service';
 import { DmThread } from '@models/dmThread.model';
@@ -21,12 +20,6 @@ async function seedWorld() {
   const { community } = await CommunityService.ensureForEvent(seeded.eventId, seeded.vendorId);
   await Membership.create({ buyerId: a._id, communityId: community._id });
   await Membership.create({ buyerId: b._id, communityId: community._id });
-  // assertCanDm now gates on connection (friend or accepted meetup), not
-  // community membership — make a/b DM-eligible so every openThread(authA, b)
-  // success path in this file keeps working. The `stranger`/`outsider`
-  // buyers created inside individual tests stay unconnected on purpose, so
-  // their negative-case assertions (403/404) still hold.
-  await MeetupRequest.create({ requesterId: a._id, targetId: b._id, status: 'accepted' });
   return { a, b, authA: `Bearer ${signBuyerToken(PHONE_A)}`, authB: `Bearer ${signBuyerToken(PHONE_B)}` };
 }
 
@@ -76,9 +69,13 @@ describe('dm routes', () => {
     void a;
   });
 
-  it('privacy: stranger cannot open a thread; block-after-open refuses sends', async () => {
+  it('privacy: a stranger CAN open a thread (no connection required); a block still refuses it and refuses sends after the fact', async () => {
     const { a, b, authA } = await seedWorld();
     const stranger = await Buyer.create({ phone: '+26878000099', password: 'secret1', avatarUrl: 'https://cdn.carrottickets.com/test/avatar.jpg' });
+    await request(app).post('/api/dm/threads').set('Authorization', `Bearer ${signBuyerToken('+26878000099')}`)
+      .send({ participantIds: [String(a._id)] }).expect(201);
+
+    await BlockService.block(a, String(stranger._id));
     await request(app).post('/api/dm/threads').set('Authorization', `Bearer ${signBuyerToken('+26878000099')}`)
       .send({ participantIds: [String(a._id)] }).expect(403);
 
@@ -86,7 +83,6 @@ describe('dm routes', () => {
     await BlockService.block(b, String(a._id));
     await request(app).post(`/api/dm/threads/${threadId}/messages`).set('Authorization', authA)
       .send({ body: 'blocked now' }).expect(403);
-    void stranger;
   });
 
   it('non-participant gets 404 on messages/read; delete-own works and masks', async () => {
