@@ -15,11 +15,11 @@ describe('SocialProfileViewService canDm/meetup fields', () => {
   afterEach(clearTestDb);
   afterAll(disconnectTestDb);
 
-  it('buyer viewer: stranger => canDm false, meetupStatus none', async () => {
+  it('buyer viewer: stranger => canDm true (no connection required), meetupStatus none', async () => {
     const viewer = await seed('+26878030001', 'viewer_a');
     await seed('+26878030002', 'target_a');
     const p = await SocialProfileViewService.forViewer('target_a', { type: 'buyer', id: String(viewer._id) });
-    expect(p!.canDm).toBe(false);
+    expect(p!.canDm).toBe(true);
     expect(p!.meetupStatus).toBe('none');
     expect(p!.meetupRequestId).toBeNull();
   });
@@ -34,12 +34,12 @@ describe('SocialProfileViewService canDm/meetup fields', () => {
     expect(p!.meetupRequestId).toBe(String(row._id));
   });
 
-  it('buyer viewer: pending outgoing => canDm false but status pending', async () => {
+  it('buyer viewer: pending outgoing => canDm still true, status pending', async () => {
     const viewer = await seed('+26878030005', 'viewer_c');
     const target = await seed('+26878030006', 'target_c');
     await MeetupRequest.create({ requesterId: viewer._id, targetId: target._id, status: 'pending' });
     const p = await SocialProfileViewService.forViewer('target_c', { type: 'buyer', id: String(viewer._id) });
-    expect(p!.canDm).toBe(false);
+    expect(p!.canDm).toBe(true);
     expect(p!.meetupStatus).toBe('pending');
   });
 

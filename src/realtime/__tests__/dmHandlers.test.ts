@@ -12,7 +12,6 @@ import { signBuyerToken, signVendorToken } from '../../__tests__/helpers/auth';
 import { Buyer, IBuyer } from '@models/buyer.model';
 import { Vendor } from '@models/vendor.model';
 import { Membership } from '@models/membership.model';
-import { MeetupRequest } from '@models/meetupRequest.model';
 import { CommunityService } from '@services/community.service';
 import { DmThreadService } from '@services/dmThread.service';
 import { MessageService } from '@services/message.service';
@@ -31,9 +30,6 @@ async function seedThread(): Promise<{ a: IBuyer; b: IBuyer; threadId: string }>
   const { community } = await CommunityService.ensureForEvent(seeded.eventId, seeded.vendorId);
   await Membership.create({ buyerId: a._id, communityId: community._id });
   await Membership.create({ buyerId: b._id, communityId: community._id });
-  // assertCanDm now gates on connection (friend or accepted meetup), not
-  // shared community membership.
-  await MeetupRequest.create({ requesterId: a._id, targetId: b._id, status: 'accepted' });
   const thread = await DmThreadService.openThread(a, [String(b._id)]);
   return { a, b, threadId: String(thread._id) };
 }

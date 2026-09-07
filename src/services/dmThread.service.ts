@@ -32,21 +32,16 @@ export class DmThreadService {
   }
 
   /**
-   * The DM privacy gate. A block beats everything; otherwise the two buyers must
-   * be connected — a mutual-follow friend OR an accepted meetup in either
-   * direction (see DmEligibilityService). This supersedes the old dmPrivacy
-   * branch: 'community' no longer means "anyone", and an accepted meetup
-   * overrides a 'friends'-only setting, so dmPrivacy no longer changes the gate.
+   * The DM privacy gate. Any signed-in buyer may message any other buyer they
+   * haven't blocked (or been blocked by) — no follow/meetup connection is
+   * required (see DmEligibilityService).
    */
   static async assertCanDm(sender: IBuyer, target: IBuyer): Promise<void> {
     const senderId = String(sender._id);
     const targetId = String(target._id);
 
-    if (await BlockService.isBlockedEitherWay(senderId, targetId)) {
+    if (!(await DmEligibilityService.canDm(senderId, targetId))) {
       throw new HttpError(403, 'You cannot message this user');
-    }
-    if (!(await DmEligibilityService.isConnected(senderId, targetId))) {
-      throw new HttpError(403, "You can only message people you've met up with");
     }
   }
 
