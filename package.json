@@ -15,6 +15,7 @@
     "backfill:operator-type": "ts-node -r tsconfig-paths/register src/scripts/backfillOperatorType.ts",
     "backfill:edit-brand-permission": "ts-node -r tsconfig-paths/register src/scripts/backfillEditBrandPermission.ts",
     "backfill:event-ticketing": "ts-node -r tsconfig-paths/register src/scripts/backfillEventTicketing.ts",
+    "backfill:external-ticketing": "ts-node -r tsconfig-paths/register src/scripts/backfillExternalTicketing.ts",
     "backfill:event-category": "ts-node -r tsconfig-paths/register src/scripts/backfillEventCategory.ts",
     "backfill:update-hashtags": "ts-node -r tsconfig-paths/register src/scripts/backfillUpdateHashtags.ts",
     "backfill:event-tag-register": "ts-node -r tsconfig-paths/register src/scripts/backfillEventTagRegister.ts",
