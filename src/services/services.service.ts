@@ -20,7 +20,7 @@ export interface ServiceCard {
 export interface BusinessProfile {
   id: string; businessName: string; slug: string | null; logoUrl: string | null;
   serviceCategory: string; city: string | null; region: string | null; bio: string | null;
-  rating: { average: number | null; count: number }; followerCount: number;
+  rating: { average: number | null; count: number }; followerCount: number; followingCount: number;
   startingPrice: { amountCents: number; unit: string } | null;
   contact: { email: string | null; phone: string | null };
   verified: boolean;
@@ -53,15 +53,16 @@ export class ServicesService {
     const v = await Vendor.findOne({ _id: businessId, ...VISIBLE_BUSINESS_FILTER })
       .select('businessName slug logoUrl serviceCategory address bio startingPrice email phoneNumber verificationStatus');
     if (!v) throw new HttpError(404, 'Business not found');
-    const [rating, followerCount] = await Promise.all([
+    const [rating, followerCount, followingCount] = await Promise.all([
       ReviewService.vendorAggregate(businessId),
       FollowService.followerCount('organizer', businessId),
+      FollowService.followingCount(businessId, 'vendor'),
     ]);
     return {
       id: String(v._id), businessName: v.businessName, slug: (v as any).slug ?? null,
       logoUrl: v.logoUrl ?? null, serviceCategory: (v as any).serviceCategory,
       city: v.address?.city ?? null, region: v.address?.region ?? null, bio: v.bio ?? null,
-      rating, followerCount, startingPrice: (v as any).startingPrice ?? null,
+      rating, followerCount, followingCount, startingPrice: (v as any).startingPrice ?? null,
       contact: { email: (v as any).email ?? null, phone: (v as any).phoneNumber ?? null },
       verified: v.verificationStatus === VerificationStatus.VERIFIED,
     };
