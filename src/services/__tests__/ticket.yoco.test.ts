@@ -83,8 +83,7 @@ describe('initiateYocoPurchase', () => {
 
     const r = await TicketService.initiateYocoPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       customerPhone: '+26878422613',
     } as any);
 
@@ -108,8 +107,7 @@ describe('initiateYocoPurchase', () => {
 
     await TicketService.initiateYocoPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       customerPhone: '+26878422613',
     } as any);
 
@@ -132,7 +130,7 @@ describe('initiateYocoPurchase', () => {
 
     await expect(
       TicketService.initiateYocoPurchase({
-        eventId, ticketTypeId, quantity: 1, customerPhone: '+26878422613',
+        eventId, items: [{ ticketTypeId: ticketTypeId, quantity: 1 }], customerPhone: '+26878422613',
       } as any)
     ).rejects.toThrow('Yoco down');
 
@@ -149,7 +147,7 @@ describe('initiateYocoPurchase', () => {
 
     await expect(
       TicketService.initiateYocoPurchase({
-        eventId, ticketTypeId, quantity: 1, customerPhone: '+26878422613',
+        eventId, items: [{ ticketTypeId: ticketTypeId, quantity: 1 }], customerPhone: '+26878422613',
       } as any)
     ).rejects.toThrow('Yoco is not available');
   });
@@ -159,7 +157,7 @@ describe('initiateYocoPurchase', () => {
     createCheckout.mockResolvedValue({ id: 'ch_lookup', redirectUrl: 'https://c' });
 
     await TicketService.initiateYocoPurchase({
-      eventId, ticketTypeId, quantity: 1, customerPhone: '+26878422613',
+      eventId, items: [{ ticketTypeId: ticketTypeId, quantity: 1 }], customerPhone: '+26878422613',
     } as any);
 
     const found = await TicketService.getYocoSaleByCheckoutId('ch_lookup');
@@ -192,6 +190,8 @@ async function seedPendingYocoSale(overrides?: { paymentStatus?: PaymentStatus }
     vendorId,
     ticketIds: [],
     quantity: 1,
+    // Composition snapshot the finalizer mints from — see TicketSale.lines.
+    lines: [{ ticketTypeId, ticketTypeName: 'General', unitPrice: 50, quantity: 1 }],
     customerName: 'Test Buyer',
     customerPhone: '+26878422613',
     totalAmount: 50,
@@ -213,8 +213,7 @@ async function seedPendingYocoSale(overrides?: { paymentStatus?: PaymentStatus }
   const { TicketReservation } = await import('@models/ticketReservation.model');
   await TicketReservation.create({
     eventId: event._id,
-    ticketTypeId,
-    quantity: 1,
+    lines: [{ ticketTypeId, quantity: 1 }],
     saleId: sale._id.toString(),
     expiresAt: new Date(Date.now() + 15 * 60_000),
     status: 'held',

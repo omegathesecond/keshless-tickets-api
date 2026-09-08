@@ -88,8 +88,7 @@ describe('initiateCardPurchase', () => {
 
     const r = await TicketService.initiateCardPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId, quantity: 1 }],
       customerPhone: '+26878422613',
     } as any);
 
@@ -119,8 +118,7 @@ describe('initiateCardPurchase', () => {
     await expect(
       TicketService.initiateCardPurchase({
         eventId,
-        ticketTypeId,
-        quantity: 1,
+        items: [{ ticketTypeId, quantity: 1 }],
         customerPhone: '+26878422613',
       } as any),
     ).rejects.toThrow('Peach down');
@@ -142,8 +140,7 @@ describe('initiateCardPurchase', () => {
     await expect(
       TicketService.initiateCardPurchase({
         eventId,
-        ticketTypeId,
-        quantity: 1,
+        items: [{ ticketTypeId, quantity: 1 }],
         customerPhone: '+26878422613',
       } as any),
     ).rejects.toThrow('Card payments are not available');
@@ -161,8 +158,7 @@ describe('initiateCardPurchase', () => {
 
     await TicketService.initiateCardPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId, quantity: 1 }],
       customerPhone: '+26878422613',
     } as any);
 

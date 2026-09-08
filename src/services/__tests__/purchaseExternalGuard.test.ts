@@ -64,8 +64,7 @@ describe('purchase refuses external events', () => {
     await expect(
       TicketService.purchaseForCustomer({
         eventId: String(event._id),
-        ticketTypeId,
-        quantity: 1,
+        items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
         customerPhone: '+26878422613',
         keshlessCardNumber: '1234567890123456',
       }),
@@ -78,8 +77,7 @@ describe('purchase refuses external events', () => {
     await expect(
       TicketService.initiateMomoPurchase({
         eventId: String(event._id),
-        ticketTypeId,
-        quantity: 1,
+        items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
         customerPhone: '+26878422613',
         momoPhone: '+26878422613',
       }),
@@ -92,8 +90,7 @@ describe('purchase refuses external events', () => {
     await expect(
       TicketService.initiateCardPurchase({
         eventId: String(event._id),
-        ticketTypeId,
-        quantity: 1,
+        items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
         customerPhone: '+26878422613',
       }),
     ).rejects.toThrow('externally');

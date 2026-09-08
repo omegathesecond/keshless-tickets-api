@@ -60,7 +60,7 @@ async function seedEvent(organizerAbsorbsServiceFee: boolean) {
 async function buyTwo(absorbs: boolean, channel: SalesChannel = SalesChannel.ONLINE) {
   const { eventId, ticketTypeId } = await seedEvent(absorbs);
   await TicketService.initiateDeltapayPurchase({
-    eventId, ticketTypeId, quantity: 2, customerPhone: '+26878422613', channel,
+    eventId, items: [{ ticketTypeId, quantity: 2 }], customerPhone: '+26878422613', channel,
   } as any);
   return (await TicketSale.findOne({ deltapaySessionId: 'sess_absorb' }))!;
 }

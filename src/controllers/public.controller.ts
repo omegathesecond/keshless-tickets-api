@@ -152,10 +152,33 @@ const contactMessageSchema = Joi.object({
 });
 
 // Validation schema for Peach card purchase initiation
+/**
+ * The cart a buyer is checking out: one entry per tier, 1..20 lines.
+ *
+ * MAX_TICKETS_PER_ORDER caps the WHOLE cart, not each line — otherwise the
+ * order limit could be exceeded by splitting across tiers, the same hole the
+ * per-account cap has (see resolveCart). Shared by every purchase rail so no
+ * two of them can disagree about what a valid cart is.
+ */
+const cartItemsSchema = Joi.array()
+  .items(Joi.object({
+    ticketTypeId: Joi.string().hex().length(24).required(),
+    quantity: Joi.number().integer().min(1).max(MAX_TICKETS_PER_ORDER).required(),
+  }))
+  .min(1)
+  .max(20)
+  .custom((value: Array<{ quantity: number }>, helpers) => {
+    const total = value.reduce((sum, l) => sum + l.quantity, 0);
+    if (total > MAX_TICKETS_PER_ORDER) {
+      return helpers.message({ custom: `You can buy at most ${MAX_TICKETS_PER_ORDER} tickets per order` } as never);
+    }
+    return value;
+  })
+  .required();
+
 const cardInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
-  ticketTypeId: Joi.string().hex().length(24).required(),
-  quantity: Joi.number().integer().min(1).max(MAX_TICKETS_PER_ORDER).required(),
+  items: cartItemsSchema,
   customerName: Joi.string().max(100).optional(),
 });
 
@@ -163,8 +186,7 @@ const cardInitiateSchema = Joi.object({
 // Same shape as card: DeltaPay collects the payer identifier on its own page.
 const deltapayInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
-  ticketTypeId: Joi.string().hex().length(24).required(),
-  quantity: Joi.number().integer().min(1).max(MAX_TICKETS_PER_ORDER).required(),
+  items: cartItemsSchema,
   customerName: Joi.string().max(100).optional(),
 });
 
@@ -172,8 +194,7 @@ const deltapayInitiateSchema = Joi.object({
 // Same shape as card: Yoco collects the card details on its own page.
 const yocoInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
-  ticketTypeId: Joi.string().hex().length(24).required(),
-  quantity: Joi.number().integer().min(1).max(MAX_TICKETS_PER_ORDER).required(),
+  items: cartItemsSchema,
   customerName: Joi.string().max(100).optional(),
 });
 
@@ -182,16 +203,14 @@ const yocoInitiateSchema = Joi.object({
 // own hosted page, so Carrot never sees them.
 const yebopayInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
-  ticketTypeId: Joi.string().hex().length(24).required(),
-  quantity: Joi.number().integer().min(1).max(MAX_TICKETS_PER_ORDER).required(),
+  items: cartItemsSchema,
   customerName: Joi.string().max(100).optional(),
 });
 
 // Validation schema for MTN MoMo purchase initiation
 const momoInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
-  ticketTypeId: Joi.string().hex().length(24).required(),
-  quantity: Joi.number().integer().min(1).max(MAX_TICKETS_PER_ORDER).required(),
+  items: cartItemsSchema,
   customerName: Joi.string().max(100).optional(),
   momoPhone: Joi.string().pattern(/^[0-9]{8,15}$/).required(),
 });
@@ -202,24 +221,7 @@ const momoInitiateSchema = Joi.object({
 // is just defence-in-depth parity with the paid paths.
 const freeClaimSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
-  // One entry per tier. MAX_TICKETS_PER_ORDER caps the WHOLE cart, not each
-  // line, so a mixed cart cannot exceed the order limit by splitting across
-  // tiers — the same reasoning as the per-account cap in resolveCart.
-  items: Joi.array()
-    .items(Joi.object({
-      ticketTypeId: Joi.string().hex().length(24).required(),
-      quantity: Joi.number().integer().min(1).max(MAX_TICKETS_PER_ORDER).required(),
-    }))
-    .min(1)
-    .max(20)
-    .custom((value: Array<{ quantity: number }>, helpers) => {
-      const total = value.reduce((sum, l) => sum + l.quantity, 0);
-      if (total > MAX_TICKETS_PER_ORDER) {
-        return helpers.message({ custom: `You can buy at most ${MAX_TICKETS_PER_ORDER} tickets per order` } as never);
-      }
-      return value;
-    })
-    .required(),
+  items: cartItemsSchema,
   customerName: Joi.string().max(100).optional().allow(''),
 });
 
@@ -255,24 +257,7 @@ export const topicPostsQuerySchema = Joi.object({
 
 const publicPurchaseSchema = Joi.object({
   eventId: Joi.string().required().regex(/^[0-9a-fA-F]{24}$/),
-  // One entry per tier. MAX_TICKETS_PER_ORDER caps the WHOLE cart, not each
-  // line, so a mixed cart cannot exceed the order limit by splitting across
-  // tiers — the same reasoning as the per-account cap in resolveCart.
-  items: Joi.array()
-    .items(Joi.object({
-      ticketTypeId: Joi.string().hex().length(24).required(),
-      quantity: Joi.number().integer().min(1).max(MAX_TICKETS_PER_ORDER).required(),
-    }))
-    .min(1)
-    .max(20)
-    .custom((value: Array<{ quantity: number }>, helpers) => {
-      const total = value.reduce((sum, l) => sum + l.quantity, 0);
-      if (total > MAX_TICKETS_PER_ORDER) {
-        return helpers.message({ custom: `You can buy at most ${MAX_TICKETS_PER_ORDER} tickets per order` } as never);
-      }
-      return value;
-    })
-    .required(),
+  items: cartItemsSchema,
   // The buyer's phone is NO LONGER taken from the body — it comes from the
   // OTP-verified buyer token (req.ticketsUser.userPhone). This guarantees
   // every ticket is tied to a phone the buyer actually controls, so it always

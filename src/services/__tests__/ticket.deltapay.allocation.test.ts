@@ -60,7 +60,7 @@ describe('initiateDeltapayPurchase — reseller allocation tier', () => {
     createSession.mockResolvedValue({ checkoutSessionId: 'sess_alloc', checkoutUrl: 'https://c' });
 
     await TicketService.initiateDeltapayPurchase({
-      eventId, ticketTypeId: allocId, quantity: 2, customerPhone: '+26878422613',
+      eventId, items: [{ ticketTypeId: allocId, quantity: 2 }], customerPhone: '+26878422613',
     } as any);
 
     const sale = await TicketSale.findOne({ deltapaySessionId: 'sess_alloc' });

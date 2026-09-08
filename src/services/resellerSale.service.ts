@@ -113,8 +113,8 @@ export class ResellerSaleService {
 
       const { saleId, referenceId, expiresAt } = await TicketService.initiateMomoPurchase({
         eventId: params.eventId,
-        ticketTypeId: params.ticketTypeId,
-        quantity: params.quantity,
+        // Reseller sales are still one tier per transaction (slice 5).
+        items: [{ ticketTypeId: params.ticketTypeId, quantity: params.quantity }],
         customerName: params.customerName,
         customerPhone: params.customerPhone ?? momoPhone,
         momoPhone,

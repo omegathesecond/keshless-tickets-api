@@ -85,8 +85,7 @@ describe('initiateDeltapayPurchase', () => {
 
     const r = await TicketService.initiateDeltapayPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       customerPhone: '+26878422613',
     } as any);
 
@@ -113,8 +112,7 @@ describe('initiateDeltapayPurchase', () => {
 
     await TicketService.initiateDeltapayPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       customerPhone: '78422613', // bare local number — must be normalised
     } as any);
 
@@ -133,8 +131,7 @@ describe('initiateDeltapayPurchase', () => {
     await expect(
       TicketService.initiateDeltapayPurchase({
         eventId,
-        ticketTypeId,
-        quantity: 1,
+        items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
         customerPhone: '+26878422613',
       } as any)
     ).rejects.toThrow('DeltaPay down');
@@ -153,8 +150,7 @@ describe('initiateDeltapayPurchase', () => {
     await expect(
       TicketService.initiateDeltapayPurchase({
         eventId,
-        ticketTypeId,
-        quantity: 1,
+        items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
         customerPhone: '+26878422613',
       } as any)
     ).rejects.toThrow('DeltaPay is not available');
@@ -167,8 +163,7 @@ describe('initiateDeltapayPurchase', () => {
 
     await TicketService.initiateDeltapayPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       customerPhone: '+26878422613',
     } as any);
 
@@ -202,6 +197,8 @@ async function seedPendingDeltapaySale(overrides?: { paymentStatus?: PaymentStat
     vendorId,
     ticketIds: [],
     quantity: 1,
+    // Composition snapshot the finalizer mints from — see TicketSale.lines.
+    lines: [{ ticketTypeId, ticketTypeName: 'General', unitPrice: 50, quantity: 1 }],
     customerName: 'Test Buyer',
     customerPhone: '+26878422613',
     totalAmount: 50,
@@ -223,8 +220,7 @@ async function seedPendingDeltapaySale(overrides?: { paymentStatus?: PaymentStat
   const { TicketReservation } = await import('@models/ticketReservation.model');
   await TicketReservation.create({
     eventId: event._id,
-    ticketTypeId,
-    quantity: 1,
+    lines: [{ ticketTypeId, quantity: 1 }],
     saleId: sale._id.toString(),
     expiresAt: new Date(Date.now() + 12 * 60_000),
     status: 'held',

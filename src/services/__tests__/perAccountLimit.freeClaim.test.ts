@@ -34,8 +34,7 @@ describe('per-account cap — free-claim path', () => {
 
     const first = await TicketService.claimFreeTicket({
       eventId: String(event._id),
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       buyerId,
       customerPhone: '76000123',
     });
@@ -44,8 +43,7 @@ describe('per-account cap — free-claim path', () => {
     await expect(
       TicketService.claimFreeTicket({
         eventId: String(event._id),
-        ticketTypeId,
-        quantity: 1,
+        items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
         buyerId,
         customerPhone: '76000123',
       }),
@@ -56,15 +54,13 @@ describe('per-account cap — free-claim path', () => {
     const { event, ticketTypeId } = await seedFreeCapEvent();
     await TicketService.claimFreeTicket({
       eventId: String(event._id),
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       buyerId: new mongoose.Types.ObjectId().toString(),
       customerPhone: '76000001',
     });
     const other = await TicketService.claimFreeTicket({
       eventId: String(event._id),
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       buyerId: new mongoose.Types.ObjectId().toString(),
       customerPhone: '76000002',
     });

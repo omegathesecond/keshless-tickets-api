@@ -64,8 +64,7 @@ describe('TicketService.initiateMomoPurchase — reseller attribution', () => {
 
     await TicketService.initiateMomoPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       customerPhone: '+26876111111',
       momoPhone: '26876111111',
       soldByType: 'reseller-operator',
@@ -98,8 +97,7 @@ describe('TicketService.initiateMomoPurchase — reseller attribution', () => {
 
     await TicketService.initiateMomoPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       customerPhone: '+26876222222',
       momoPhone: '26876222222',
     });

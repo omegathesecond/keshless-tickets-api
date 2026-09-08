@@ -48,8 +48,7 @@ describe('TicketService.purchaseForCustomer — email-only buyer (no customerPho
 
     const result = await TicketService.purchaseForCustomer({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       // No customerPhone — email-only buyer.
       customerEmail: 'buyer@example.com',
       buyerId,
@@ -82,8 +81,7 @@ describe('TicketService.purchaseForCustomer — email-only buyer (no customerPho
     // No name, no phone, no email at all -> 'Guest'.
     const result = await TicketService.purchaseForCustomer({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       keshlessCardNumber: '1234567890123456',
     });
 
@@ -106,8 +104,7 @@ describe('TicketService.purchaseForCustomer — email-only buyer (no customerPho
 
     const result = await TicketService.purchaseForCustomer({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       // No customerPhone — email-only buyer.
       customerEmail: 'buyer@example.com',
       keshlessCardNumber: '1234567890123456',

@@ -91,8 +91,7 @@ describe('TicketService.initiateMomoPurchase', () => {
 
     const result = await TicketService.initiateMomoPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 2,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 2 }],
       customerPhone: '+26876111111',
       momoPhone: '26876111111',
     });
@@ -122,8 +121,7 @@ describe('TicketService.initiateMomoPurchase', () => {
 
     await TicketService.initiateMomoPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       customerPhone: '+26876707421',
       momoPhone: '76707421', // bare local 8-digit number, as a till operator would type
     });
@@ -144,8 +142,7 @@ describe('TicketService.initiateMomoPurchase', () => {
     await expect(
       TicketService.initiateMomoPurchase({
         eventId,
-        ticketTypeId,
-        quantity: 2,
+        items: [{ ticketTypeId: ticketTypeId, quantity: 2 }],
         customerPhone: '+26876111111',
         momoPhone: '26876111111',
       })
@@ -173,8 +170,7 @@ describe('TicketService.finalizeMomoSale', () => {
     // Initiate first
     await TicketService.initiateMomoPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 2,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 2 }],
       customerPhone: '+26876111111',
       momoPhone: '26876111111',
     });
@@ -232,8 +228,7 @@ describe('TicketService.finalizeMomoSale', () => {
 
     await TicketService.initiateMomoPurchase({
       eventId: event._id.toString(),
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       customerPhone: '+26878199001',
       momoPhone: '26878199001',
       buyerId: String(buyer._id),
@@ -260,8 +255,7 @@ describe('TicketService.finalizeMomoSale', () => {
 
     await TicketService.initiateMomoPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 2,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 2 }],
       customerPhone: '+26876222222',
       momoPhone: '26876222222',
     });
@@ -291,8 +285,7 @@ describe('TicketService.finalizeMomoSale', () => {
 
     await TicketService.initiateMomoPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 2,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 2 }],
       customerPhone: '+26876555555',
       momoPhone: '26876555555',
     });
@@ -321,8 +314,7 @@ describe('TicketService.finalizeMomoSale', () => {
 
     await TicketService.initiateMomoPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 2,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 2 }],
       customerPhone: '+26876666666',
       momoPhone: '26876666666',
     });
@@ -344,8 +336,7 @@ describe('TicketService.finalizeMomoSale', () => {
 
     await TicketService.initiateMomoPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       customerPhone: '+26876333333',
       momoPhone: '26876333333',
     });
@@ -369,8 +360,7 @@ describe('TicketService.finalizeMomoSale', () => {
     // Initiate as +26876111111
     await TicketService.initiateMomoPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       customerPhone: '+26876111111',
       momoPhone: '26876111111',
     });
@@ -409,8 +399,7 @@ describe('TicketService.finalizeMomoSale', () => {
     // initiate sets externalId = sale.saleId (the SALE-… string) and stores momoReferenceId
     await TicketService.initiateMomoPurchase({
       eventId,
-      ticketTypeId,
-      quantity: 1,
+      items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       customerPhone: '+26876222222',
       momoPhone: '26876222222',
     });
@@ -439,8 +428,7 @@ describe('TicketService.finalizeMomoSale', () => {
 
     await TicketService.initiateMomoPurchase({
       eventId,
-      ticketTypeId,
-      quantity,
+      items: [{ ticketTypeId: ticketTypeId, quantity: quantity }],
       customerPhone: '+26876444444',
       momoPhone: '26876444444',
     });

@@ -1281,8 +1281,8 @@ export class TicketService {
    */
   static async initiateMomoPurchase(p: {
     eventId: string;
-    ticketTypeId: string;
-    quantity: number;
+    /** One entry per tier. A single-tier purchase is a one-element array. */
+    items: CartLine[];
     // Contact/attribution phone — optional because an email-only buyer may
     // not have one (the MoMo wallet number to actually debit is the
     // separate, still-required `momoPhone` field below).
@@ -1307,24 +1307,40 @@ export class TicketService {
   }): Promise<{ referenceId: string; saleId: string; expiresAt: Date }> {
     if (!this.momoClient.isConfigured()) throw new Error('MTN MoMo is not available');
 
-    const avail = await EventService.checkTicketAvailability(
-      p.eventId, p.ticketTypeId, p.quantity, PaymentMethod.MTN_MOMO,
-      { buyerId: p.buyerId, phone: p.customerPhone }
-    );
-    if (!avail.available) throw new Error(avail.message || 'Tickets not available');
 
-    const tt = avail.ticketTypeData!;
-    const totalAmount = tt.price * p.quantity;
-
-    const event = await Event.findById(p.eventId);
-    if (!event) throw new Error('Event not found');
-    assertCarrotTicketing(event);
-
-    // Attribution: vendorId is the event organizer (derive from event if absent,
-    // as the buyer/vendor path does today). soldBy defaults to the organizer.
+    // Attribution is resolved FIRST because resolveCart needs the channel to
+    // decide whether a buyer service fee applies at all (ONLINE only).
     const soldByType = p.soldByType ?? 'vendor';
     const mappedSoldByType = SOLD_BY_TYPE_MAP[soldByType];
     const channel = p.channel ?? deriveChannel(mappedSoldByType);
+
+    // One call replaces the availability check, price maths, event load,
+    // ticketing guard, restrictToMethod guard and fee computation this rail
+    // used to carry itself — and adds the per-account cap across the cart.
+    const cart = await resolveCart({
+      eventId: p.eventId,
+      items: p.items,
+      method: PaymentMethod.MTN_MOMO,
+      buyerId: p.buyerId,
+      phone: p.customerPhone,
+      channel,
+    });
+    const event = cart.event;
+    const totalAmount = cart.faceTotal;
+    const { serviceFeeAmount, amountCharged, absorbedServiceFeeAmount } = cart;
+    // Attribution tier — resolveCart guarantees every line in a cart shares
+    // one owner, so the first line speaks for all of them.
+    const tt = cart.lines[0]!.ticketType;
+    // Composition snapshot the finalizer mints from (see TicketSale.lines).
+    const saleLines = cart.lines.map((l) => ({
+      ticketTypeId: l.ticketTypeId,
+      ticketTypeName: l.ticketType.name,
+      unitPrice: l.unitPrice,
+      quantity: l.quantity,
+    }));
+
+    // vendorId is the event organizer (derive from the event if absent, as the
+    // buyer/vendor path does today). soldBy defaults to the organizer.
     const vendorId = p.vendorId ?? event.vendorId;
     const soldBy = p.soldBy ?? event.vendorId;
 
@@ -1335,14 +1351,6 @@ export class TicketService {
     // BEFORE the economic snapshot because on an event whose organizer absorbs
     // the fee, the buyer is charged face and the fee becomes a deduction from
     // organizerProceeds — so the snapshot below needs the amount.
-    const feeCfg = await PaymentConfigService.get();
-    const { serviceFeeAmount, amountCharged, absorbedServiceFeeAmount } =
-      channel === SalesChannel.ONLINE
-        ? computeServiceFee(totalAmount, p.quantity, PaymentMethod.MTN_MOMO, feeCfg, {
-            waiveServiceFee: tt.waiveServiceFee,
-            absorbedByOrganizer: event.organizerAbsorbsServiceFee,
-          })
-        : { serviceFeeAmount: 0, amountCharged: totalAmount, absorbedServiceFeeAmount: 0 };
 
     // fee with soldByType 'ResellerOperator'. Written now so the sale is
     // ledger-visible even before tickets are minted at finalize.
@@ -1369,7 +1377,8 @@ export class TicketService {
       eventId: p.eventId,
       vendorId,
       ticketIds: [],
-      quantity: p.quantity,
+      quantity: cart.totalQuantity,
+      lines: saleLines,
       customerName: p.customerName,
       customerPhone: p.customerPhone,
       ...(p.customerEmail ? { customerEmail: p.customerEmail.toLowerCase() } : {}),
@@ -1391,9 +1400,7 @@ export class TicketService {
     // 2) Reserve inventory
     const { expiresAt } = await ReservationService.reserve({
       eventId: p.eventId,
-      // One-element array: these rails still take a single tier; their carts
-      // arrive in slice 2, when this becomes a real multi-line hold.
-      lines: [{ ticketTypeId: p.ticketTypeId, quantity: p.quantity }],
+      lines: cart.lines.map((l) => ({ ticketTypeId: l.ticketTypeId, quantity: l.quantity })),
       saleId: sale._id.toString(),
       ttlMs: this.MOMO_TTL_MS,
     });
@@ -1410,7 +1417,9 @@ export class TicketService {
         currency: process.env['MTN_MOMO_CURRENCY'] || 'SZL',
         payerMsisdn,
         externalId: sale.saleId,
-        payerMessage: `Carrot Tickets - ${tt.name} x${p.quantity}`,
+        payerMessage: cart.lines.length === 1
+          ? `Carrot Tickets - ${tt.name} x${cart.totalQuantity}`
+          : `Carrot Tickets - ${cart.totalQuantity} tickets (${cart.lines.length} types)`,
       });
       sale.momoReferenceId = referenceId;
       await sale.save();
@@ -1453,8 +1462,8 @@ export class TicketService {
    */
   static async initiateCardPurchase(p: {
     eventId: string;
-    ticketTypeId: string;
-    quantity: number;
+    /** One entry per tier. A single-tier purchase is a one-element array. */
+    items: CartLine[];
     customerPhone?: string;
     customerName?: string;
     // Buyer identity, when purchasing while logged in — persisted on the
@@ -1474,23 +1483,40 @@ export class TicketService {
     const cardCfg = await PaymentConfigService.get();
     if (!cardCfg.peachCardEnabled) throw new Error('Card payments are not available');
 
-    const avail = await EventService.checkTicketAvailability(
-      p.eventId, p.ticketTypeId, p.quantity, PaymentMethod.PEACH_CARD,
-      { buyerId: p.buyerId, phone: p.customerPhone }
-    );
-    if (!avail.available) throw new Error(avail.message || 'Tickets not available');
 
-    const tt = avail.ticketTypeData!;
-    const totalAmount = tt.price * p.quantity;
-
-    const event = await Event.findById(p.eventId);
-    if (!event) throw new Error('Event not found');
-    assertCarrotTicketing(event);
-
-    // Attribution: mirror initiateMomoPurchase defaults exactly.
+    // Attribution is resolved FIRST because resolveCart needs the channel to
+    // decide whether a buyer service fee applies at all (ONLINE only).
     const soldByType = p.soldByType ?? 'vendor';
     const mappedSoldByType = SOLD_BY_TYPE_MAP[soldByType];
     const channel = p.channel ?? deriveChannel(mappedSoldByType);
+
+    // One call replaces the availability check, price maths, event load,
+    // ticketing guard, restrictToMethod guard and fee computation this rail
+    // used to carry itself — and adds the per-account cap across the cart.
+    const cart = await resolveCart({
+      eventId: p.eventId,
+      items: p.items,
+      method: PaymentMethod.PEACH_CARD,
+      buyerId: p.buyerId,
+      phone: p.customerPhone,
+      channel,
+    });
+    const event = cart.event;
+    const totalAmount = cart.faceTotal;
+    const { serviceFeeAmount, amountCharged, absorbedServiceFeeAmount } = cart;
+    // Attribution tier — resolveCart guarantees every line in a cart shares
+    // one owner, so the first line speaks for all of them.
+    const tt = cart.lines[0]!.ticketType;
+    // Composition snapshot the finalizer mints from (see TicketSale.lines).
+    const saleLines = cart.lines.map((l) => ({
+      ticketTypeId: l.ticketTypeId,
+      ticketTypeName: l.ticketType.name,
+      unitPrice: l.unitPrice,
+      quantity: l.quantity,
+    }));
+
+    // Attribution: mirror initiateMomoPurchase defaults exactly. soldByType /
+    // channel are resolved above, before resolveCart needs the channel.
     const vendorId = p.vendorId ?? event.vendorId;
     const soldBy = p.soldBy ?? event.vendorId;
 
@@ -1498,13 +1524,6 @@ export class TicketService {
     // BEFORE the economic snapshot because on an event whose organizer absorbs
     // the fee, the buyer is charged face and the fee becomes a deduction from
     // organizerProceeds — so the snapshot below needs the amount.
-    const { serviceFeeAmount, amountCharged, absorbedServiceFeeAmount } =
-      channel === SalesChannel.ONLINE
-        ? computeServiceFee(totalAmount, p.quantity, PaymentMethod.PEACH_CARD, cardCfg, {
-            waiveServiceFee: tt.waiveServiceFee,
-            absorbedByOrganizer: event.organizerAbsorbsServiceFee,
-          })
-        : { serviceFeeAmount: 0, amountCharged: totalAmount, absorbedServiceFeeAmount: 0 };
 
     // Immutable economic snapshot — card is electronic so custody derives to 'carrot'.
     const econ = await this.buildSaleSnapshot({
@@ -1530,7 +1549,8 @@ export class TicketService {
       eventId: p.eventId,
       vendorId,
       ticketIds: [],
-      quantity: p.quantity,
+      quantity: cart.totalQuantity,
+      lines: saleLines,
       customerName: p.customerName,
       customerPhone: p.customerPhone,
       ...(p.customerEmail ? { customerEmail: p.customerEmail.toLowerCase() } : {}),
@@ -1552,9 +1572,7 @@ export class TicketService {
     // 2) Reserve inventory
     const { expiresAt } = await ReservationService.reserve({
       eventId: p.eventId,
-      // One-element array: these rails still take a single tier; their carts
-      // arrive in slice 2, when this becomes a real multi-line hold.
-      lines: [{ ticketTypeId: p.ticketTypeId, quantity: p.quantity }],
+      lines: cart.lines.map((l) => ({ ticketTypeId: l.ticketTypeId, quantity: l.quantity })),
       saleId: sale._id.toString(),
       ttlMs: this.CARD_TTL_MS,
     });
@@ -1604,8 +1622,8 @@ export class TicketService {
    */
   static async initiateDeltapayPurchase(p: {
     eventId: string;
-    ticketTypeId: string;
-    quantity: number;
+    /** One entry per tier. A single-tier purchase is a one-element array. */
+    items: CartLine[];
     customerPhone?: string;
     customerName?: string;
     // Buyer identity, when purchasing while logged in — persisted on the
@@ -1630,23 +1648,39 @@ export class TicketService {
     const cfg = await PaymentConfigService.get();
     if (!cfg.deltapayEnabled) throw new Error('DeltaPay is not available');
 
-    const avail = await EventService.checkTicketAvailability(
-      p.eventId, p.ticketTypeId, p.quantity, PaymentMethod.DELTAPAY,
-      { buyerId: p.buyerId, phone: p.customerPhone }
-    );
-    if (!avail.available) throw new Error(avail.message || 'Tickets not available');
 
-    const tt = avail.ticketTypeData!;
-    const totalAmount = tt.price * p.quantity;
-
-    const event = await Event.findById(p.eventId);
-    if (!event) throw new Error('Event not found');
-    assertCarrotTicketing(event);
-
-    // Attribution: mirror initiateCardPurchase defaults exactly.
+    // Attribution is resolved FIRST because resolveCart needs the channel to
+    // decide whether a buyer service fee applies at all (ONLINE only).
     const soldByType = p.soldByType ?? 'vendor';
     const mappedSoldByType = SOLD_BY_TYPE_MAP[soldByType];
     const channel = p.channel ?? deriveChannel(mappedSoldByType);
+
+    // One call replaces the availability check, price maths, event load,
+    // ticketing guard, restrictToMethod guard and fee computation this rail
+    // used to carry itself — and adds the per-account cap across the cart.
+    const cart = await resolveCart({
+      eventId: p.eventId,
+      items: p.items,
+      method: PaymentMethod.DELTAPAY,
+      buyerId: p.buyerId,
+      phone: p.customerPhone,
+      channel,
+    });
+    const event = cart.event;
+    const totalAmount = cart.faceTotal;
+    const { serviceFeeAmount, amountCharged, absorbedServiceFeeAmount } = cart;
+    // Attribution tier — resolveCart guarantees every line in a cart shares
+    // one owner, so the first line speaks for all of them.
+    const tt = cart.lines[0]!.ticketType;
+    // Composition snapshot the finalizer mints from (see TicketSale.lines).
+    const saleLines = cart.lines.map((l) => ({
+      ticketTypeId: l.ticketTypeId,
+      ticketTypeName: l.ticketType.name,
+      unitPrice: l.unitPrice,
+      quantity: l.quantity,
+    }));
+
+    // Attribution: mirror initiateCardPurchase defaults exactly.
     const vendorId = p.vendorId ?? event.vendorId;
     const soldBy = p.soldBy ?? event.vendorId;
 
@@ -1654,13 +1688,6 @@ export class TicketService {
     // BEFORE the economic snapshot because on an event whose organizer absorbs
     // the fee, the buyer is charged face and the fee becomes a deduction from
     // organizerProceeds — so the snapshot below needs the amount.
-    const { serviceFeeAmount, amountCharged, absorbedServiceFeeAmount } =
-      channel === SalesChannel.ONLINE
-        ? computeServiceFee(totalAmount, p.quantity, PaymentMethod.DELTAPAY, cfg, {
-            waiveServiceFee: tt.waiveServiceFee,
-            absorbedByOrganizer: event.organizerAbsorbsServiceFee,
-          })
-        : { serviceFeeAmount: 0, amountCharged: totalAmount, absorbedServiceFeeAmount: 0 };
 
     // Immutable economic snapshot — DeltaPay is electronic so custody derives to 'carrot'.
     const econ = await this.buildSaleSnapshot({
@@ -1686,7 +1713,8 @@ export class TicketService {
       eventId: p.eventId,
       vendorId,
       ticketIds: [],
-      quantity: p.quantity,
+      quantity: cart.totalQuantity,
+      lines: saleLines,
       customerName: p.customerName,
       customerPhone: p.customerPhone,
       ...(p.customerEmail ? { customerEmail: p.customerEmail.toLowerCase() } : {}),
@@ -1708,9 +1736,7 @@ export class TicketService {
     // 2) Reserve inventory
     const { expiresAt } = await ReservationService.reserve({
       eventId: p.eventId,
-      // One-element array: these rails still take a single tier; their carts
-      // arrive in slice 2, when this becomes a real multi-line hold.
-      lines: [{ ticketTypeId: p.ticketTypeId, quantity: p.quantity }],
+      lines: cart.lines.map((l) => ({ ticketTypeId: l.ticketTypeId, quantity: l.quantity })),
       saleId: sale._id.toString(),
       ttlMs: this.DELTAPAY_TTL_MS,
     });
@@ -1738,7 +1764,9 @@ export class TicketService {
         amount: amountCharged,
         merchantReference: sale.saleId,
         returnUrl: returnUrlWithRef.toString(),
-        displayDescription: `${p.quantity} x ${tt.name || 'Ticket'} — ${event.name}`.slice(0, 200),
+        displayDescription: (cart.lines.length === 1
+          ? `${cart.totalQuantity} x ${tt.name || 'Ticket'} — ${event.name}`
+          : `${cart.totalQuantity} tickets (${cart.lines.length} types) — ${event.name}`).slice(0, 200),
         ...(process.env['DELTAPAY_CALLBACK_URL']
           ? { sessionCallbackUrl: process.env['DELTAPAY_CALLBACK_URL'] }
           : {}),
@@ -2308,8 +2336,8 @@ export class TicketService {
    */
   static async initiateYocoPurchase(p: {
     eventId: string;
-    ticketTypeId: string;
-    quantity: number;
+    /** One entry per tier. A single-tier purchase is a one-element array. */
+    items: CartLine[];
     customerPhone?: string;
     customerName?: string;
     // Buyer identity, when purchasing while logged in — persisted on the
@@ -2334,23 +2362,39 @@ export class TicketService {
     const cfg = await PaymentConfigService.get();
     if (!cfg.yocoEnabled) throw new Error('Yoco is not available');
 
-    const avail = await EventService.checkTicketAvailability(
-      p.eventId, p.ticketTypeId, p.quantity, PaymentMethod.YOCO,
-      { buyerId: p.buyerId, phone: p.customerPhone }
-    );
-    if (!avail.available) throw new Error(avail.message || 'Tickets not available');
 
-    const tt = avail.ticketTypeData!;
-    const totalAmount = tt.price * p.quantity;
-
-    const event = await Event.findById(p.eventId);
-    if (!event) throw new Error('Event not found');
-    assertCarrotTicketing(event);
-
-    // Attribution: mirror initiateDeltapayPurchase defaults exactly.
+    // Attribution is resolved FIRST because resolveCart needs the channel to
+    // decide whether a buyer service fee applies at all (ONLINE only).
     const soldByType = p.soldByType ?? 'vendor';
     const mappedSoldByType = SOLD_BY_TYPE_MAP[soldByType];
     const channel = p.channel ?? deriveChannel(mappedSoldByType);
+
+    // One call replaces the availability check, price maths, event load,
+    // ticketing guard, restrictToMethod guard and fee computation this rail
+    // used to carry itself — and adds the per-account cap across the cart.
+    const cart = await resolveCart({
+      eventId: p.eventId,
+      items: p.items,
+      method: PaymentMethod.YOCO,
+      buyerId: p.buyerId,
+      phone: p.customerPhone,
+      channel,
+    });
+    const event = cart.event;
+    const totalAmount = cart.faceTotal;
+    const { serviceFeeAmount, amountCharged, absorbedServiceFeeAmount } = cart;
+    // Attribution tier — resolveCart guarantees every line in a cart shares
+    // one owner, so the first line speaks for all of them.
+    const tt = cart.lines[0]!.ticketType;
+    // Composition snapshot the finalizer mints from (see TicketSale.lines).
+    const saleLines = cart.lines.map((l) => ({
+      ticketTypeId: l.ticketTypeId,
+      ticketTypeName: l.ticketType.name,
+      unitPrice: l.unitPrice,
+      quantity: l.quantity,
+    }));
+
+    // Attribution: mirror initiateDeltapayPurchase defaults exactly.
     const vendorId = p.vendorId ?? event.vendorId;
     const soldBy = p.soldBy ?? event.vendorId;
 
@@ -2358,13 +2402,6 @@ export class TicketService {
     // BEFORE the economic snapshot because on an event whose organizer absorbs
     // the fee, the buyer is charged face and the fee becomes a deduction from
     // organizerProceeds — so the snapshot below needs the amount.
-    const { serviceFeeAmount, amountCharged, absorbedServiceFeeAmount } =
-      channel === SalesChannel.ONLINE
-        ? computeServiceFee(totalAmount, p.quantity, PaymentMethod.YOCO, cfg, {
-            waiveServiceFee: tt.waiveServiceFee,
-            absorbedByOrganizer: event.organizerAbsorbsServiceFee,
-          })
-        : { serviceFeeAmount: 0, amountCharged: totalAmount, absorbedServiceFeeAmount: 0 };
 
     // Immutable economic snapshot — Yoco is electronic so custody derives to 'carrot'.
     const econ = await this.buildSaleSnapshot({
@@ -2387,7 +2424,8 @@ export class TicketService {
       eventId: p.eventId,
       vendorId,
       ticketIds: [],
-      quantity: p.quantity,
+      quantity: cart.totalQuantity,
+      lines: saleLines,
       customerName: p.customerName,
       customerPhone: p.customerPhone,
       ...(p.customerEmail ? { customerEmail: p.customerEmail.toLowerCase() } : {}),
@@ -2409,9 +2447,7 @@ export class TicketService {
     // 2) Reserve inventory
     const { expiresAt } = await ReservationService.reserve({
       eventId: p.eventId,
-      // One-element array: these rails still take a single tier; their carts
-      // arrive in slice 2, when this becomes a real multi-line hold.
-      lines: [{ ticketTypeId: p.ticketTypeId, quantity: p.quantity }],
+      lines: cart.lines.map((l) => ({ ticketTypeId: l.ticketTypeId, quantity: l.quantity })),
       saleId: sale._id.toString(),
       ttlMs: this.YOCO_TTL_MS,
     });
@@ -2641,8 +2677,8 @@ export class TicketService {
    */
   static async initiateYeboPayPurchase(p: {
     eventId: string;
-    ticketTypeId: string;
-    quantity: number;
+    /** One entry per tier. A single-tier purchase is a one-element array. */
+    items: CartLine[];
     customerPhone?: string;
     customerName?: string;
     // Buyer identity, when purchasing while logged in — persisted on the
@@ -2667,23 +2703,39 @@ export class TicketService {
     const cfg = await PaymentConfigService.get();
     if (!cfg.yebopayEnabled) throw new Error('YeboPay is not available');
 
-    const avail = await EventService.checkTicketAvailability(
-      p.eventId, p.ticketTypeId, p.quantity, PaymentMethod.YEBOPAY,
-      { buyerId: p.buyerId, phone: p.customerPhone }
-    );
-    if (!avail.available) throw new Error(avail.message || 'Tickets not available');
 
-    const tt = avail.ticketTypeData!;
-    const totalAmount = tt.price * p.quantity;
-
-    const event = await Event.findById(p.eventId);
-    if (!event) throw new Error('Event not found');
-    assertCarrotTicketing(event);
-
-    // Attribution: mirror initiateDeltapayPurchase defaults exactly.
+    // Attribution is resolved FIRST because resolveCart needs the channel to
+    // decide whether a buyer service fee applies at all (ONLINE only).
     const soldByType = p.soldByType ?? 'vendor';
     const mappedSoldByType = SOLD_BY_TYPE_MAP[soldByType];
     const channel = p.channel ?? deriveChannel(mappedSoldByType);
+
+    // One call replaces the availability check, price maths, event load,
+    // ticketing guard, restrictToMethod guard and fee computation this rail
+    // used to carry itself — and adds the per-account cap across the cart.
+    const cart = await resolveCart({
+      eventId: p.eventId,
+      items: p.items,
+      method: PaymentMethod.YEBOPAY,
+      buyerId: p.buyerId,
+      phone: p.customerPhone,
+      channel,
+    });
+    const event = cart.event;
+    const totalAmount = cart.faceTotal;
+    const { serviceFeeAmount, amountCharged, absorbedServiceFeeAmount } = cart;
+    // Attribution tier — resolveCart guarantees every line in a cart shares
+    // one owner, so the first line speaks for all of them.
+    const tt = cart.lines[0]!.ticketType;
+    // Composition snapshot the finalizer mints from (see TicketSale.lines).
+    const saleLines = cart.lines.map((l) => ({
+      ticketTypeId: l.ticketTypeId,
+      ticketTypeName: l.ticketType.name,
+      unitPrice: l.unitPrice,
+      quantity: l.quantity,
+    }));
+
+    // Attribution: mirror initiateDeltapayPurchase defaults exactly.
     const vendorId = p.vendorId ?? event.vendorId;
     const soldBy = p.soldBy ?? event.vendorId;
 
@@ -2691,13 +2743,6 @@ export class TicketService {
     // BEFORE the economic snapshot because on an event whose organizer absorbs
     // the fee, the buyer is charged face and the fee becomes a deduction from
     // organizerProceeds — so the snapshot below needs the amount.
-    const { serviceFeeAmount, amountCharged, absorbedServiceFeeAmount } =
-      channel === SalesChannel.ONLINE
-        ? computeServiceFee(totalAmount, p.quantity, PaymentMethod.YEBOPAY, cfg, {
-            waiveServiceFee: tt.waiveServiceFee,
-            absorbedByOrganizer: event.organizerAbsorbsServiceFee,
-          })
-        : { serviceFeeAmount: 0, amountCharged: totalAmount, absorbedServiceFeeAmount: 0 };
 
     // Immutable economic snapshot — YeboPay is electronic so custody derives to 'carrot'.
     const econ = await this.buildSaleSnapshot({
@@ -2720,7 +2765,8 @@ export class TicketService {
       eventId: p.eventId,
       vendorId,
       ticketIds: [],
-      quantity: p.quantity,
+      quantity: cart.totalQuantity,
+      lines: saleLines,
       customerName: p.customerName,
       customerPhone: p.customerPhone,
       ...(p.customerEmail ? { customerEmail: p.customerEmail.toLowerCase() } : {}),
@@ -2742,9 +2788,7 @@ export class TicketService {
     // 2) Reserve inventory
     const { expiresAt } = await ReservationService.reserve({
       eventId: p.eventId,
-      // One-element array: these rails still take a single tier; their carts
-      // arrive in slice 2, when this becomes a real multi-line hold.
-      lines: [{ ticketTypeId: p.ticketTypeId, quantity: p.quantity }],
+      lines: cart.lines.map((l) => ({ ticketTypeId: l.ticketTypeId, quantity: l.quantity })),
       saleId: sale._id.toString(),
       ttlMs: this.YEBOPAY_TTL_MS,
     });
