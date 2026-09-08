@@ -3,6 +3,8 @@ import { TicketSale } from '@models/ticketSale.model';
 import { Event } from '@models/event.model';
 import { ITicket, ITicketSale, TicketStatus, PaymentMethod, PaymentStatus, SalesChannel } from '@interfaces/ticket.interface';
 import { EventStatus, type ITicketType } from '@interfaces/event.interface';
+import { resolveCart } from '@services/cart.service';
+import type { CartLine } from '@interfaces/cart.interface';
 import { EventService } from '@services/event.service';
 import { getProcessor } from '@services/payments';
 import { SmsService } from '@services/sms.service';
@@ -869,8 +871,8 @@ export class TicketService {
    */
   static async purchaseForCustomer(params: {
     eventId: string;
-    ticketTypeId: string;
-    quantity: number;
+    /** One entry per tier. A single-tier purchase is a one-element array. */
+    items: CartLine[];
     // Optional — email-only buyers (no verified phone on file) have none.
     customerPhone?: string;
     customerName?: string;
@@ -896,8 +898,7 @@ export class TicketService {
   }> {
     const {
       eventId,
-      ticketTypeId,
-      quantity,
+      items,
       customerEmail,
       buyerId,
       keshlessCardNumber,
@@ -909,29 +910,20 @@ export class TicketService {
     // email, so an email-only buyer's ticket is never nameless.
     const customerName = params.customerName?.trim() || customerPhone || params.customerEmail || 'Guest';
 
-    // Only published events are buyable.
-    const event = await Event.findOne({ _id: eventId, status: EventStatus.PUBLISHED });
-    if (!event) {
-      throw new Error('Event not found or not available');
-    }
-    assertCarrotTicketing(event);
-
-    const ticketType = event.ticketTypes.find(tt => tt._id?.toString() === ticketTypeId);
-    if (!ticketType) {
-      throw new Error('Ticket type not found');
-    }
-
-    if (ticketType.isSoldOut || ticketType.available < quantity) {
-      throw new Error(`Only ${ticketType.available} tickets available`);
-    }
-
-    // This buyer path pays with the Keshless wallet/card; a tier restricted to
-    // another method (e.g. a DeltaPay-exclusive block) must not be sold here.
-    if (ticketType.restrictToMethod && ticketType.restrictToMethod !== PaymentMethod.KESHLESS_WALLET) {
-      throw new Error(`This ticket can only be bought with ${ticketType.restrictToMethod}`);
-    }
-
-    const totalAmount = ticketType.price * quantity;
+    // One call replaces the hand-rolled event lookup, sold-out check,
+    // restrictToMethod guard and fee computation that used to live here — and
+    // adds the per-account cap across the whole cart. Every rail shares it, so
+    // none of them can drift from another.
+    const cart = await resolveCart({
+      eventId,
+      items,
+      method: PaymentMethod.KESHLESS_WALLET,
+      buyerId,
+      phone: customerPhone,
+    });
+    const event = cart.event;
+    const { faceTotal: totalAmount, serviceFeeAmount, absorbedServiceFeeAmount } = cart;
+    const quantity = cart.totalQuantity;
 
     // PIN threshold keys off the FACE subtotal (the service fee must not shift
     // the PIN rule). Buyer-paid service fee is added on top of face.
@@ -939,23 +931,11 @@ export class TicketService {
       throw new Error('PIN required for purchases of E50 or more');
     }
 
-    const feeCfg = await PaymentConfigService.get();
-    const { serviceFeeAmount, absorbedServiceFeeAmount } = computeServiceFee(
-      totalAmount,
-      quantity,
-      PaymentMethod.KESHLESS_WALLET,
-      feeCfg,
-      {
-        waiveServiceFee: ticketType.waiveServiceFee,
-        absorbedByOrganizer: event.organizerAbsorbsServiceFee,
-      },
-    );
-
     // sellTickets debits the wallet (face + service fee) and mints tickets.
     const result = await TicketService.sellTickets({
       vendorId: event.vendorId!.toString(),
       eventId,
-      lines: [{ ticketTypeId, quantity }],
+      lines: cart.lines.map((l) => ({ ticketTypeId: l.ticketTypeId, quantity: l.quantity })),
       customerName,
       customerPhone,
       customerEmail,
@@ -973,10 +953,12 @@ export class TicketService {
     this.sendTicketConfirmations(event, result.tickets, customerPhone, customerEmail);
 
     return {
+      // Each ticket reports ITS OWN tier — a mixed cart has more than one, so
+      // naming a single tier here would mislabel every ticket but the first's.
       tickets: result.tickets.map(ticket => ({
         ticketId: ticket.ticketId,
         eventName: event.name,
-        ticketType: ticketType.name,
+        ticketType: ticket.ticketType,
         eventDate: event.eventDate,
         startTime: event.startTime,
         venue: event.venue,
@@ -1032,8 +1014,8 @@ export class TicketService {
    */
   static async claimFreeTicket(params: {
     eventId: string;
-    ticketTypeId: string;
-    quantity: number;
+    /** One entry per tier. Every line must be genuinely free. */
+    items: CartLine[];
     customerPhone?: string;
     customerName?: string;
     customerEmail?: string;
@@ -1051,39 +1033,37 @@ export class TicketService {
     quantity: number;
     event: { name: string; date: Date; venue: string };
   }> {
-    const { eventId, ticketTypeId, quantity, customerEmail, buyerId } = params;
+    const { eventId, items, customerEmail, buyerId } = params;
 
     const customerPhone = params.customerPhone ? normalizePhone(params.customerPhone) : undefined;
     // Name only personalises the printed ticket; fall back to phone, then
     // email, so an email-only buyer's ticket is never nameless.
     const customerName = params.customerName?.trim() || customerPhone || params.customerEmail || 'Guest';
 
-    // Only published events are buyable.
-    const event = await Event.findOne({ _id: eventId, status: EventStatus.PUBLISHED });
-    if (!event) {
-      throw new Error('Event not found or not available');
-    }
-    assertCarrotTicketing(event);
+    const cart = await resolveCart({
+      eventId,
+      items,
+      method: PaymentMethod.CASH,
+      buyerId,
+      phone: customerPhone,
+    });
+    const event = cart.event;
+    const quantity = cart.totalQuantity;
 
-    const ticketType = event.ticketTypes.find(tt => tt._id?.toString() === ticketTypeId);
-    if (!ticketType) {
-      throw new Error('Ticket type not found');
-    }
-
-    // The whole point of this path: reject anything that actually costs money.
-    if (ticketType.price > 0) {
-      throw new Error('This ticket is not free — please choose a payment method');
-    }
-
-    if (ticketType.isSoldOut || ticketType.available < quantity) {
-      throw new Error(`Only ${ticketType.available} tickets available`);
+    // The whole point of this path: it mints without taking any money, so
+    // EVERY line must be genuinely free, checked against the stored tier price
+    // and never the caller's word. One paid line must not ride along in a cart
+    // of free ones.
+    const paidLine = cart.lines.find((l) => l.unitPrice > 0);
+    if (paidLine) {
+      throw new Error(`${paidLine.ticketType.name} is not free — please choose a payment method`);
     }
 
     // sellTickets mints via the CashProcessor (no money moves) at face 0.
     const result = await TicketService.sellTickets({
       vendorId: event.vendorId!.toString(),
       eventId,
-      lines: [{ ticketTypeId, quantity }],
+      lines: cart.lines.map((l) => ({ ticketTypeId: l.ticketTypeId, quantity: l.quantity })),
       customerName,
       customerPhone,
       customerEmail,
@@ -1098,10 +1078,12 @@ export class TicketService {
     this.sendTicketConfirmations(event, result.tickets, customerPhone, customerEmail);
 
     return {
+      // Each ticket reports ITS OWN tier — a mixed cart has more than one, so
+      // naming a single tier here would mislabel every ticket but the first's.
       tickets: result.tickets.map(ticket => ({
         ticketId: ticket.ticketId,
         eventName: event.name,
-        ticketType: ticketType.name,
+        ticketType: ticket.ticketType,
         eventDate: event.eventDate,
         startTime: event.startTime,
         venue: event.venue,

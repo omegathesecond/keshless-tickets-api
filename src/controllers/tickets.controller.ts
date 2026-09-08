@@ -331,8 +331,7 @@ export class TicketsController {
 
       const result = await TicketService.purchaseForCustomer({
         eventId: value.eventId,
-        ticketTypeId: value.ticketTypeId,
-        quantity: value.quantity,
+        items: value.items,
         customerPhone: phone,
         customerName: value.customerName,
         keshlessCardNumber: value.keshlessCardNumber,

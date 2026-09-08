@@ -202,8 +202,24 @@ const momoInitiateSchema = Joi.object({
 // is just defence-in-depth parity with the paid paths.
 const freeClaimSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
-  ticketTypeId: Joi.string().hex().length(24).required(),
-  quantity: Joi.number().integer().min(1).max(MAX_TICKETS_PER_ORDER).required(),
+  // One entry per tier. MAX_TICKETS_PER_ORDER caps the WHOLE cart, not each
+  // line, so a mixed cart cannot exceed the order limit by splitting across
+  // tiers — the same reasoning as the per-account cap in resolveCart.
+  items: Joi.array()
+    .items(Joi.object({
+      ticketTypeId: Joi.string().hex().length(24).required(),
+      quantity: Joi.number().integer().min(1).max(MAX_TICKETS_PER_ORDER).required(),
+    }))
+    .min(1)
+    .max(20)
+    .custom((value: Array<{ quantity: number }>, helpers) => {
+      const total = value.reduce((sum, l) => sum + l.quantity, 0);
+      if (total > MAX_TICKETS_PER_ORDER) {
+        return helpers.message({ custom: `You can buy at most ${MAX_TICKETS_PER_ORDER} tickets per order` } as never);
+      }
+      return value;
+    })
+    .required(),
   customerName: Joi.string().max(100).optional().allow(''),
 });
 
@@ -239,8 +255,24 @@ export const topicPostsQuerySchema = Joi.object({
 
 const publicPurchaseSchema = Joi.object({
   eventId: Joi.string().required().regex(/^[0-9a-fA-F]{24}$/),
-  ticketTypeId: Joi.string().required().regex(/^[0-9a-fA-F]{24}$/),
-  quantity: Joi.number().integer().min(1).max(MAX_TICKETS_PER_ORDER).required(),
+  // One entry per tier. MAX_TICKETS_PER_ORDER caps the WHOLE cart, not each
+  // line, so a mixed cart cannot exceed the order limit by splitting across
+  // tiers — the same reasoning as the per-account cap in resolveCart.
+  items: Joi.array()
+    .items(Joi.object({
+      ticketTypeId: Joi.string().hex().length(24).required(),
+      quantity: Joi.number().integer().min(1).max(MAX_TICKETS_PER_ORDER).required(),
+    }))
+    .min(1)
+    .max(20)
+    .custom((value: Array<{ quantity: number }>, helpers) => {
+      const total = value.reduce((sum, l) => sum + l.quantity, 0);
+      if (total > MAX_TICKETS_PER_ORDER) {
+        return helpers.message({ custom: `You can buy at most ${MAX_TICKETS_PER_ORDER} tickets per order` } as never);
+      }
+      return value;
+    })
+    .required(),
   // The buyer's phone is NO LONGER taken from the body — it comes from the
   // OTP-verified buyer token (req.ticketsUser.userPhone). This guarantees
   // every ticket is tied to a phone the buyer actually controls, so it always
@@ -793,8 +825,7 @@ export class PublicController {
 
       const {
         eventId,
-        ticketTypeId,
-        quantity,
+        items,
         keshlessCardNumber,
         keshlessPin
       } = value;
@@ -814,8 +845,7 @@ export class PublicController {
       // in-app proxy checkout) so process + amount charged are identical.
       const result = await TicketService.purchaseForCustomer({
         eventId,
-        ticketTypeId,
-        quantity,
+        items,
         customerPhone: buyer.phone,
         customerEmail: buyer.email,
         buyerId: String(buyer._id),
@@ -854,8 +884,7 @@ export class PublicController {
 
       const result = await TicketService.claimFreeTicket({
         eventId: value.eventId,
-        ticketTypeId: value.ticketTypeId,
-        quantity: value.quantity,
+        items: value.items,
         customerPhone: buyer.phone,
         customerEmail: buyer.email,
         buyerId: String(buyer._id),

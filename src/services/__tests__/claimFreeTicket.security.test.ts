@@ -38,8 +38,7 @@ describe('TicketService.claimFreeTicket — free-only enforcement', () => {
     await expect(
       TicketService.claimFreeTicket({
         eventId,
-        ticketTypeId,
-        quantity: 1,
+        items: [{ ticketTypeId, quantity: 1 }],
         customerEmail: 'attacker@example.com',
         buyerId: new mongoose.Types.ObjectId().toString(),
       }),
@@ -55,8 +54,7 @@ describe('TicketService.claimFreeTicket — free-only enforcement', () => {
 
     const result = await TicketService.claimFreeTicket({
       eventId,
-      ticketTypeId,
-      quantity: 2,
+      items: [{ ticketTypeId, quantity: 2 }],
       customerEmail: 'buyer@example.com',
       buyerId,
     });
@@ -81,8 +79,7 @@ describe('TicketService.claimFreeTicket — free-only enforcement', () => {
     await expect(
       TicketService.claimFreeTicket({
         eventId,
-        ticketTypeId,
-        quantity: 5,
+        items: [{ ticketTypeId, quantity: 5 }],
         customerEmail: 'buyer@example.com',
         buyerId: new mongoose.Types.ObjectId().toString(),
       }),
