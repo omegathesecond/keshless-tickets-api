@@ -31,6 +31,49 @@ export function mergeCartLines(items: CartLine[]): CartLine[] {
 }
 
 /**
+ * A tier carrying `restrictToMethod` is EXCLUSIVE: it may only be bought on its
+ * own method, and never alongside another tier.
+ *
+ * The alternative — accepting the cart and offering only the methods valid for
+ * EVERY line — almost always yields an empty method list, leaving the buyer
+ * holding a cart they cannot pay for with no explanation of why. Failing here,
+ * naming the tier, is the honest version.
+ */
+function assertMethodCompatible(lines: ResolvedLine[], method: PaymentMethod): void {
+  const restricted = lines.filter((l) => l.ticketType.restrictToMethod);
+  if (restricted.length === 0) return;
+
+  if (lines.length > 1) {
+    throw new Error(
+      `${restricted[0]!.ticketType.name} can only be bought on its own, not with other ticket types`
+    );
+  }
+  const only = restricted[0]!;
+  if (only.ticketType.restrictToMethod !== method) {
+    throw new Error(`This ticket can only be bought with ${only.ticketType.restrictToMethod}`);
+  }
+}
+
+/**
+ * A TicketSale stores ONE resellerId, but an allocation tier is attributed to
+ * the tier's owning reseller (see resolveSaleResellerId). A cart spanning two
+ * different owners therefore has no correct value to store, and silently
+ * picking one would misattribute money in the reseller ledger — so it is
+ * rejected until slice 5 models per-line attribution.
+ */
+function assertSingleAttribution(lines: ResolvedLine[]): void {
+  const owners = new Set(
+    lines.map((l) => (l.ticketType.isAllocation ? String(l.ticketType.resellerId ?? 'MISSING') : 'none'))
+  );
+  if (owners.has('MISSING')) {
+    throw new Error('Allocation tier is missing resellerId — cannot attribute sale');
+  }
+  if (owners.size > 1) {
+    throw new Error('Allocation tickets must be bought on their own, not mixed with other ticket types');
+  }
+}
+
+/**
  * `maxTicketsPerAccount` is a per-EVENT cap, so it must be measured against the
  * buyer's existing tickets PLUS every line in this cart at once. Checking it
  * per line is the bypass multi-tier introduces: a 4-ticket cap on a nine-tier
@@ -116,6 +159,9 @@ export async function resolveCart(input: {
       subtotal: round2(ticketType.price * item.quantity),
     });
   }
+
+  assertMethodCompatible(lines, input.method);
+  assertSingleAttribution(lines);
 
   const faceTotal = round2(lines.reduce((sum, l) => sum + l.subtotal, 0));
   const totalQuantity = lines.reduce((sum, l) => sum + l.quantity, 0);

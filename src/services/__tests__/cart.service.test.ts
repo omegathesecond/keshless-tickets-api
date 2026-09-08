@@ -197,3 +197,94 @@ describe('resolveCart — per-account cap', () => {
     })).rejects.toThrow(/limited to one per person/i);
   });
 });
+
+describe('resolveCart — restricted and allocation tiers', () => {
+  it('rejects a restricted tier bought alongside another tier', async () => {
+    const { eventId, ticketTypeIds } = await seedEventWithTiers([
+      { name: 'General', price: 100, quantity: 10 },
+      { name: 'DeltaPay Exclusive', price: 200, quantity: 10, restrictToMethod: PaymentMethod.DELTAPAY },
+    ]);
+
+    await expect(resolveCart({
+      eventId,
+      items: [
+        { ticketTypeId: ticketTypeIds[0]!, quantity: 1 },
+        { ticketTypeId: ticketTypeIds[1]!, quantity: 1 },
+      ],
+      method: PaymentMethod.DELTAPAY,
+    })).rejects.toThrow(/DeltaPay Exclusive/);
+  });
+
+  it('allows a restricted tier alone on its own method', async () => {
+    const { eventId, ticketTypeIds } = await seedEventWithTiers([
+      { name: 'DeltaPay Exclusive', price: 200, quantity: 10, restrictToMethod: PaymentMethod.DELTAPAY },
+    ]);
+    const cart = await resolveCart({
+      eventId,
+      items: [{ ticketTypeId: ticketTypeIds[0]!, quantity: 2 }],
+      method: PaymentMethod.DELTAPAY,
+    });
+    expect(cart.faceTotal).toBe(400);
+  });
+
+  it('rejects a restricted tier on the wrong method', async () => {
+    const { eventId, ticketTypeIds } = await seedEventWithTiers([
+      { name: 'DeltaPay Exclusive', price: 200, quantity: 10, restrictToMethod: PaymentMethod.DELTAPAY },
+    ]);
+    await expect(resolveCart({
+      eventId,
+      items: [{ ticketTypeId: ticketTypeIds[0]!, quantity: 1 }],
+      method: PaymentMethod.KESHLESS_WALLET,
+    })).rejects.toThrow(/can only be bought with/i);
+  });
+
+  it('rejects a cart mixing allocation and non-allocation tiers', async () => {
+    const resellerId = new mongoose.Types.ObjectId();
+    const { eventId, ticketTypeIds } = await seedEventWithTiers([
+      { name: 'General', price: 100, quantity: 10 },
+      { name: 'Reseller Block', price: 100, quantity: 10, isAllocation: true, resellerId },
+    ]);
+
+    await expect(resolveCart({
+      eventId,
+      items: [
+        { ticketTypeId: ticketTypeIds[0]!, quantity: 1 },
+        { ticketTypeId: ticketTypeIds[1]!, quantity: 1 },
+      ],
+      method: PaymentMethod.KESHLESS_WALLET,
+    })).rejects.toThrow(/allocation/i);
+  });
+
+  it('rejects a cart spanning two DIFFERENT resellers', async () => {
+    const { eventId, ticketTypeIds } = await seedEventWithTiers([
+      { name: 'Block A', price: 100, quantity: 10, isAllocation: true, resellerId: new mongoose.Types.ObjectId() },
+      { name: 'Block B', price: 150, quantity: 10, isAllocation: true, resellerId: new mongoose.Types.ObjectId() },
+    ]);
+
+    await expect(resolveCart({
+      eventId,
+      items: [
+        { ticketTypeId: ticketTypeIds[0]!, quantity: 1 },
+        { ticketTypeId: ticketTypeIds[1]!, quantity: 1 },
+      ],
+      method: PaymentMethod.KESHLESS_WALLET,
+    })).rejects.toThrow(/allocation/i);
+  });
+
+  it('allows several allocation tiers owned by the SAME reseller', async () => {
+    const resellerId = new mongoose.Types.ObjectId();
+    const { eventId, ticketTypeIds } = await seedEventWithTiers([
+      { name: 'Block A', price: 100, quantity: 10, isAllocation: true, resellerId },
+      { name: 'Block B', price: 150, quantity: 10, isAllocation: true, resellerId },
+    ]);
+    const cart = await resolveCart({
+      eventId,
+      items: [
+        { ticketTypeId: ticketTypeIds[0]!, quantity: 1 },
+        { ticketTypeId: ticketTypeIds[1]!, quantity: 1 },
+      ],
+      method: PaymentMethod.KESHLESS_WALLET,
+    });
+    expect(cart.faceTotal).toBe(250);
+  });
+});
