@@ -70,9 +70,8 @@ describe('TicketService.sellTickets stamps buyer identity', () => {
 
     const { sale, tickets } = await TicketService.sellTickets({
       eventId,
-      ticketTypeId,
+      lines: [{ ticketTypeId: ticketTypeId, quantity: 2 }],
       vendorId,
-      quantity: 2,
       paymentMethod: PaymentMethod.CASH,
       soldBy: vendorId,
       soldByType: 'vendor',

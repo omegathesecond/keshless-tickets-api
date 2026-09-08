@@ -129,11 +129,12 @@ export class ResellerSaleService {
       return { saleId, status: 'pending', referenceId, expiresAt };
     }
 
+    // Reseller sales are still one tier per transaction (their multi-line
+    // carts land in slice 5), so this is a one-element `lines` array.
     const { sale, tickets, paymentMessage } = await TicketService.sellTickets({
       eventId: params.eventId,
       vendorId: event.vendorId!.toString(),
-      ticketTypeId: params.ticketTypeId,
-      quantity: params.quantity,
+      lines: [{ ticketTypeId: params.ticketTypeId, quantity: params.quantity }],
       paymentMethod: METHOD_ENUM[params.paymentMethod],
       customerName: params.customerName,
       customerPhone: params.customerPhone,

@@ -43,9 +43,8 @@ describe('TicketService.sellTickets — pending charge status', () => {
 
     const { sale } = await TicketService.sellTickets({
       eventId,
-      ticketTypeId,
+      lines: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       vendorId,
-      quantity: 1,
       paymentMethod: PaymentMethod.KESHLESS_WALLET,
       soldBy: vendorId,
       soldByType: 'vendor',
@@ -67,9 +66,8 @@ describe('TicketService.sellTickets — pending charge status', () => {
 
     await TicketService.sellTickets({
       eventId,
-      ticketTypeId,
+      lines: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       vendorId,
-      quantity: 1,
       paymentMethod: PaymentMethod.KESHLESS_WALLET,
       soldBy: vendorId,
       soldByType: 'vendor',
@@ -93,9 +91,8 @@ describe('TicketService.sellTickets — pending charge status', () => {
 
     const { sale } = await TicketService.sellTickets({
       eventId,
-      ticketTypeId,
+      lines: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       vendorId,
-      quantity: 1,
       paymentMethod: PaymentMethod.KESHLESS_WALLET,
       soldBy: vendorId,
       soldByType: 'vendor',

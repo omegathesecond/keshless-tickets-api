@@ -22,9 +22,8 @@ describe('TicketService.sellTickets economic snapshot', () => {
 
     const { sale } = await TicketService.sellTickets({
       eventId,
-      ticketTypeId,
+      lines: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       vendorId,
-      quantity: 1,
       paymentMethod: PaymentMethod.CASH,
       soldBy: vendorId,
       soldByType: 'vendor',

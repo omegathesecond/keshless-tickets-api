@@ -2,7 +2,7 @@ import { Ticket } from '@models/ticket.model';
 import { TicketSale } from '@models/ticketSale.model';
 import { Event } from '@models/event.model';
 import { ITicket, ITicketSale, TicketStatus, PaymentMethod, PaymentStatus, SalesChannel } from '@interfaces/ticket.interface';
-import { EventStatus } from '@interfaces/event.interface';
+import { EventStatus, type ITicketType } from '@interfaces/event.interface';
 import { EventService } from '@services/event.service';
 import { getProcessor } from '@services/payments';
 import { SmsService } from '@services/sms.service';
@@ -32,8 +32,19 @@ import mongoose from 'mongoose';
 export interface SellTicketsParams {
   eventId: string;
   vendorId: string;
-  ticketTypeId: string;
-  quantity: number;
+  /**
+   * One entry per tier in this sale. A single-tier sale is a one-element
+   * array — the shape every caller sent implicitly before multi-tier
+   * checkout.
+   *
+   * Deliberately just {ticketTypeId, quantity}, NOT the resolved tier: this
+   * function already re-reads every tier through checkTicketAvailability (it
+   * is the choke point, so it cannot take a caller's word for stock), and
+   * that call hands back the tier. Asking callers for the snapshot too would
+   * make each of them load the event for data we fetch anyway, and let a
+   * stale snapshot disagree with the tier we actually validated.
+   */
+  lines: Array<{ ticketTypeId: string; quantity: number }>;
   customerName?: string;
   customerPhone?: string;
   // Buyer identity (buyer-authed purchase paths only — VENDOR/POS sales
@@ -257,8 +268,7 @@ export class TicketService {
       const {
         eventId,
         vendorId,
-        ticketTypeId,
-        quantity,
+        lines,
         customerName,
         customerEmail,
         buyerId,
@@ -289,21 +299,41 @@ export class TicketService {
       // Legacy-doc default only — every current event carries `currency`.
       const displayCurrency: EventCurrency = eventForGuard?.currency ?? 'SZL';
 
-      // Check ticket availability
-      const availabilityCheck = await EventService.checkTicketAvailability(
-        eventId,
-        ticketTypeId,
-        quantity,
-        paymentMethod,
-        { buyerId: params.buyerId, phone: params.customerPhone }
-      );
+      const quantity = lines.reduce((sum, l) => sum + l.quantity, 0);
 
-      if (!availabilityCheck.available) {
-        throw new Error(availabilityCheck.message || 'Tickets not available');
+      // Availability is re-checked per line even though resolveCart already
+      // did it: this is the choke point EVERY path funnels through, including
+      // the POS and reseller callers that never go near resolveCart.
+      //
+      // Note this checks each line against its own quantity. That is the right
+      // per-tier stock question, but it makes checkTicketAvailability's
+      // per-account cap check per-line here too, which is weaker than the rule.
+      // That is not a hole: multi-line carts only ever arrive via resolveCart,
+      // which enforces the cap against the cart TOTAL before we get here, and
+      // the direct callers (POS, reseller) are single-line, where the two are
+      // the same number.
+      const resolvedLines: Array<{ ticketTypeId: string; ticketType: ITicketType; quantity: number }> = [];
+      for (const line of lines) {
+        const availabilityCheck = await EventService.checkTicketAvailability(
+          eventId,
+          line.ticketTypeId,
+          line.quantity,
+          paymentMethod,
+          { buyerId: params.buyerId, phone: params.customerPhone }
+        );
+        if (!availabilityCheck.available) {
+          throw new Error(availabilityCheck.message || 'Tickets not available');
+        }
+        resolvedLines.push({
+          ticketTypeId: line.ticketTypeId,
+          ticketType: availabilityCheck.ticketTypeData!,
+          quantity: line.quantity,
+        });
       }
 
-      const ticketTypeData = availabilityCheck.ticketTypeData!;
-      const totalAmount = ticketTypeData.price * quantity;
+      const totalAmount = round2(
+        resolvedLines.reduce((sum, l) => sum + l.ticketType.price * l.quantity, 0)
+      );
 
       // Buyer-paid service fee (online only — callers that omit it charge face).
       // totalAmount stays face value; the wallet is debited amountCharged.
@@ -317,7 +347,9 @@ export class TicketService {
       const charge = await proc.charge({
         method: paymentMethod,
         amount: amountCharged,
-        description: `Carrot Tickets - ${ticketTypeData.name} x${quantity}`,
+        description: resolvedLines.length === 1
+          ? `Carrot Tickets - ${resolvedLines[0]!.ticketType.name} x${resolvedLines[0]!.quantity}`
+          : `Carrot Tickets - ${quantity} tickets (${resolvedLines.length} types)`,
         keshlessCardNumber,
         keshlessPin,
       });
@@ -355,22 +387,29 @@ export class TicketService {
         absorbedServiceFeeAmount,
       });
       // Allocation tiers are attributed to the tier's owning reseller regardless
-      // of who rang the sale (same rule as the online buyer paths).
-      const saleResellerId = resolveSaleResellerId(ticketTypeData, params.resellerId ? String(params.resellerId) : undefined);
+      // of who rang the sale (same rule as the online buyer paths). Taken from
+      // the FIRST line: resolveCart guarantees every line in a cart shares one
+      // attribution, rejecting carts that would span two owners.
+      const attributionTier = resolvedLines[0]!.ticketType;
+      const saleResellerId = resolveSaleResellerId(attributionTier, params.resellerId ? String(params.resellerId) : undefined);
       const resellerAttribution = {
         ...(saleResellerId ? { resellerId: saleResellerId } : {}),
         ...(params.hubId ? { hubId: params.hubId } : {}),
-        ...(ticketTypeData.isAllocation ? { isAllocation: true } : {}),
+        ...(attributionTier.isAllocation ? { isAllocation: true } : {}),
       };
 
-      // Create tickets
+      // Create tickets — one inner pass per cart line, so every ticket carries
+      // ITS OWN tier's name and price.
       const tickets: ITicket[] = [];
-      for (let i = 0; i < quantity; i++) {
+      const flattened = resolvedLines.flatMap((line) =>
+        Array.from({ length: line.quantity }, () => line.ticketType)
+      );
+      for (const tier of flattened) {
         const ticket = this.buildTicket({
           eventId,
           vendorId,
-          ticketType: ticketTypeData.name,
-          price: ticketTypeData.price,
+          ticketType: tier.name,
+          price: tier.price,
           customerName,
           customerPhone,
           customerEmail,
@@ -388,14 +427,15 @@ export class TicketService {
               await session.abortTransaction();
               session.endSession();
             }
-            // Retry all tickets without session
+            // Retry ALL tickets without a session — same per-line flattening,
+            // or this fallback would silently mint the wrong tiers.
             const ticketsWithoutSession: ITicket[] = [];
-            for (let j = 0; j < quantity; j++) {
+            for (const retryTier of flattened) {
               const t = this.buildTicket({
                 eventId,
                 vendorId,
-                ticketType: ticketTypeData.name,
-                price: ticketTypeData.price,
+                ticketType: retryTier.name,
+                price: retryTier.price,
                 customerName,
                 customerPhone,
                 customerEmail,
@@ -436,13 +476,18 @@ export class TicketService {
               { saleId: saleWithoutSession._id }
             );
 
-            // Update event ticket counts
-            await EventService.updateTicketsSold(
-              eventId,
-              ticketTypeId,
-              quantity,
-              totalAmount
-            );
+            // Update event ticket counts — PER LINE. Each tier's own `sold`
+            // counter moves by its own quantity, and revenue by its own
+            // subtotal (updateTicketsSold withholds an allocation line's
+            // proceeds from organizer revenue on its own).
+            for (const line of resolvedLines) {
+              await EventService.updateTicketsSold(
+                eventId,
+                line.ticketTypeId,
+                line.quantity,
+                round2(line.ticketType.price * line.quantity)
+              );
+            }
 
             await this.autoFollowOrganizerForSale(saleWithoutSession);
 
@@ -489,13 +534,17 @@ export class TicketService {
         session ? { session } : {}
       );
 
-      // Update event ticket counts
-      await EventService.updateTicketsSold(
-        eventId,
-        ticketTypeId,
-        quantity,
-        totalAmount
-      );
+      // Update event ticket counts — PER LINE, so each tier's own `sold`
+      // counter moves by its own quantity rather than the whole cart landing
+      // on one tier.
+      for (const line of resolvedLines) {
+        await EventService.updateTicketsSold(
+          eventId,
+          line.ticketTypeId,
+          line.quantity,
+          round2(line.ticketType.price * line.quantity)
+        );
+      }
 
       if (session) {
         await session.commitTransaction();
@@ -906,8 +955,7 @@ export class TicketService {
     const result = await TicketService.sellTickets({
       vendorId: event.vendorId!.toString(),
       eventId,
-      ticketTypeId,
-      quantity,
+      lines: [{ ticketTypeId, quantity }],
       customerName,
       customerPhone,
       customerEmail,
@@ -1035,8 +1083,7 @@ export class TicketService {
     const result = await TicketService.sellTickets({
       vendorId: event.vendorId!.toString(),
       eventId,
-      ticketTypeId,
-      quantity,
+      lines: [{ ticketTypeId, quantity }],
       customerName,
       customerPhone,
       customerEmail,

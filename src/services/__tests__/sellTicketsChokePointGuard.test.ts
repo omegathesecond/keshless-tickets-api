@@ -93,8 +93,7 @@ describe('POS "sell tickets" path refuses external events (TicketService.sellTic
       TicketService.sellTickets({
         eventId,
         vendorId,
-        ticketTypeId,
-        quantity: 1,
+        lines: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
         customerName: 'Walk-up buyer',
         customerPhone: '+26878422613',
         paymentMethod: PaymentMethod.CASH,
@@ -118,8 +117,7 @@ describe('POS "sell tickets" path refuses external events (TicketService.sellTic
       TicketService.sellTickets({
         eventId,
         vendorId,
-        ticketTypeId,
-        quantity: 1,
+        lines: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
         paymentMethod: PaymentMethod.CASH,
         soldBy: new mongoose.Types.ObjectId().toString(),
         soldByType: 'sub-user',
@@ -136,8 +134,7 @@ describe('POS "sell tickets" path refuses external events (TicketService.sellTic
     const result = await TicketService.sellTickets({
       eventId,
       vendorId,
-      ticketTypeId,
-      quantity: 1,
+      lines: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
       paymentMethod: PaymentMethod.CASH,
       soldBy: vendorId,
       soldByType: 'vendor',

@@ -21,7 +21,7 @@ describe('sellTickets channel', () => {
   it('vendor cash sale defaults to box_office', async () => {
     const { eventId, ticketTypeId, vendorId } = await seedPublishedEvent({ price: 50, capacity: 5 });
     const { sale } = await TicketService.sellTickets({
-      eventId, ticketTypeId, vendorId, quantity: 1,
+      eventId, lines: [{ ticketTypeId: ticketTypeId, quantity: 1 }], vendorId,
       paymentMethod: PaymentMethod.CASH, soldBy: vendorId, soldByType: 'vendor',
       customerPhone: '+26878422613',
     });
@@ -31,7 +31,7 @@ describe('sellTickets channel', () => {
   it('explicit channel overrides the derived default', async () => {
     const { eventId, ticketTypeId, vendorId } = await seedPublishedEvent({ price: 50, capacity: 5 });
     const { sale } = await TicketService.sellTickets({
-      eventId, ticketTypeId, vendorId, quantity: 1,
+      eventId, lines: [{ ticketTypeId: ticketTypeId, quantity: 1 }], vendorId,
       paymentMethod: PaymentMethod.CASH, soldBy: vendorId, soldByType: 'vendor',
       customerPhone: '+26878422613', channel: SalesChannel.ONLINE,
     });

@@ -876,11 +876,21 @@ export class TicketsController {
         return;
       }
 
+      // The POS still sells ONE tier per ring-up (its basket lands in slice 4),
+      // so translate its {ticketTypeId, quantity} body into the one-element
+      // `lines` array sellTickets now takes. The spread is why TypeScript
+      // cannot see this shape change on its own — the conversion is explicit
+      // for exactly that reason.
+      const { ticketTypeId, quantity, ...rest } = value as {
+        ticketTypeId: string; quantity: number;
+      } & Record<string, unknown>;
+
       const result = await TicketService.sellTickets({
+        ...(rest as Omit<Parameters<typeof TicketService.sellTickets>[0], 'vendorId' | 'soldBy' | 'soldByType' | 'lines'>),
         vendorId: ticketsUser.vendorId as string,
         soldBy: (ticketsUser.userId || ticketsUser.vendorId) as string,
         soldByType: ticketsUser.userType === 'vendor' ? 'vendor' : 'sub-user',
-        ...value
+        lines: [{ ticketTypeId, quantity }],
       });
 
       ApiResponseUtil.created(
