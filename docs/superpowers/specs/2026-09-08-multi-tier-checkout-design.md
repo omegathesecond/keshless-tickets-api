@@ -19,7 +19,7 @@ The single-tier assumption is much shallower than it looks. It lives in the
 
 | Thing | Shape today | Needs changing? |
 |---|---|---|
-| `TicketSale` | `ticketIds[]`, `quantity`, aggregate money. **No `ticketTypeId` field.** | **No** |
+| `TicketSale` | `ticketIds[]`, `quantity`, aggregate money. **No `ticketTypeId` field.** | **Yes, additively** — see the correction below |
 | `Ticket` | Carries its own `ticketType` + `price` | **No** |
 | `Event.ticketTypes[]` | Per-tier `available`, `reserved`, `isSoldOut`, `waiveServiceFee`, `restrictToMethod` | **No** |
 | `TicketReservation` | One `ticketTypeId` + `quantity`, `saleId` **unique** | **Yes** — see below |
@@ -27,9 +27,41 @@ The single-tier assumption is much shallower than it looks. It lives in the
 | `checkTicketAvailability` | Single tier | **Yes** |
 | 7 rails' `initiate*` | Single tier in the params | **Yes** |
 
-A sale is therefore *already* a container of arbitrary tickets. **No migration of
-`TicketSale` or `Ticket` is required**, and historical sales stay readable
-unchanged.
+A sale is therefore *already* a container of arbitrary tickets, and historical
+sales stay readable unchanged.
+
+### Correction (2026-09-09, found building slice 2)
+
+The original claim here — "no `TicketSale` change is required" — was **half
+right, and the wrong half was load-bearing.**
+
+It holds for the two synchronous rails, which mint immediately from the
+resolved cart and never need to remember what the cart was. It fails for the
+five async rails, which create a PENDING sale now and mint from a **webhook
+later**. At finalize time they reconstructed the order as:
+
+```
+sale.quantity tickets · one tier (from the reservation) · price = sale.totalAmount / sale.quantity
+```
+
+That average price is correct only while every ticket in a sale costs the same
+— which is exactly the assumption multi-tier removes. On 2×General(100) +
+1×VIP(250) it would mint three tickets of one tier at 150 each and move the
+wrong tier's inventory, reporting success throughout.
+
+Re-reading the tiers at finalize is not an alternative: the organizer may have
+edited a price between checkout and payment, and the buyer agreed to the old
+one.
+
+**`TicketSale` therefore gains `lines[]`** — `{ticketTypeId, ticketTypeName,
+unitPrice, quantity}` snapshotted at checkout. The field is **additive with no
+backfill**: sales written before multi-tier checkout all predate any mixed
+cart, so nothing reads it without checking. It also makes a sale
+self-describing, which is where the dashboard's per-line breakdown (§6) now
+comes from, rather than being derived from `ticketIds`.
+
+A settled sale with no `lines[]` **throws** rather than minting a guess — see
+the cutover note in §4 for how in-flight sales are drained before deploy.
 
 `sellTickets` having exactly four callers — `tickets.controller` (POS),
 `resellerSale.service`, `purchaseForCustomer`, `claimFreeTicket` — is what makes
