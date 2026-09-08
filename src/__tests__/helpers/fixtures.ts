@@ -6,7 +6,7 @@
  */
 import mongoose from 'mongoose';
 import { Event } from '@models/event.model';
-import { EventStatus } from '@interfaces/event.interface';
+import { EventStatus, type IEvent } from '@interfaces/event.interface';
 import { Reseller } from '@models/reseller.model';
 import { ResellerHub } from '@models/resellerHub.model';
 import { ResellerOperator } from '@models/resellerOperator.model';
@@ -64,6 +64,61 @@ export async function seedPublishedEvent(
     ticketTypeId,
     vendorId: vendorId.toString(),
     capacity,
+  };
+}
+
+export interface SeedTierInput extends Record<string, unknown> {
+  name: string;
+  price: number;
+  quantity: number;
+}
+
+export interface SeededMultiTierEvent {
+  eventId: string;
+  vendorId: string;
+  ticketTypeIds: string[];
+  event: IEvent;
+}
+
+/**
+ * A PUBLISHED event with N ticket tiers, for the multi-tier cart paths.
+ * `seedPublishedEvent` above stays the single-tier convenience wrapper the
+ * older sale-path suites use — this is its sibling rather than a replacement,
+ * so those suites keep their simpler `{ eventId, ticketTypeId }` return.
+ *
+ * Each tier defaults `sold`/`reserved` to 0; pass any other ITicketType field
+ * (isSoldOut, waiveServiceFee, restrictToMethod, isAllocation, resellerId…)
+ * straight through.
+ */
+export async function seedEventWithTiers(
+  tiers: SeedTierInput[],
+  opts: {
+    vendorId?: mongoose.Types.ObjectId;
+    maxTicketsPerAccount?: number;
+    organizerAbsorbsServiceFee?: boolean;
+  } = {}
+): Promise<SeededMultiTierEvent> {
+  const vendorId = opts.vendorId ?? new mongoose.Types.ObjectId();
+  const futureDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+  const event = await Event.create({
+    vendorId,
+    name: 'Multi-tier Test Event',
+    venue: 'Test Venue',
+    eventDate: futureDate,
+    startTime: futureDate,
+    endTime: new Date(futureDate.getTime() + 2 * 60 * 60 * 1000),
+    status: EventStatus.PUBLISHED,
+    ...(opts.maxTicketsPerAccount ? { maxTicketsPerAccount: opts.maxTicketsPerAccount } : {}),
+    ...(opts.organizerAbsorbsServiceFee ? { organizerAbsorbsServiceFee: true } : {}),
+    ticketTypes: tiers.map((t) => ({ sold: 0, reserved: 0, ...t })),
+  });
+
+  return {
+    eventId: event._id.toString(),
+    vendorId: vendorId.toString(),
+    ticketTypeIds: event.ticketTypes.map((tt) => tt._id!.toString()),
+    event,
   };
 }
 
