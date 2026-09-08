@@ -12,6 +12,8 @@ import { resolveCart, mergeCartLines } from '@services/cart.service';
 import { EventStatus } from '@interfaces/event.interface';
 import { PaymentMethod, TicketStatus } from '@interfaces/ticket.interface';
 import { Ticket } from '@models/ticket.model';
+import { PaymentConfigService } from '@services/paymentConfig.service';
+import { computeServiceFee } from '@utils/serviceFee.util';
 
 beforeAll(connectTestDb);
 afterEach(async () => { await clearTestDb(); });
@@ -286,5 +288,75 @@ describe('resolveCart — restricted and allocation tiers', () => {
       method: PaymentMethod.KESHLESS_WALLET,
     });
     expect(cart.faceTotal).toBe(250);
+  });
+});
+
+describe('resolveCart — service fee', () => {
+  // A real per-ticket fee, so "per line then summed" is actually observable.
+  beforeEach(async () => { await PaymentConfigService.update({ keshlessServiceFee: 5 }); });
+
+  it('charges a mixed waived/non-waived cart the SUM of the two bought separately', async () => {
+    const { eventId, ticketTypeIds } = await seedEventWithTiers([
+      { name: 'General', price: 100, quantity: 10 },
+      { name: 'Waived', price: 100, quantity: 10, waiveServiceFee: true },
+    ]);
+    const method = PaymentMethod.KESHLESS_WALLET;
+
+    const genOnly = await resolveCart({ eventId, method, items: [{ ticketTypeId: ticketTypeIds[0]!, quantity: 2 }] });
+    const waivedOnly = await resolveCart({ eventId, method, items: [{ ticketTypeId: ticketTypeIds[1]!, quantity: 3 }] });
+    const together = await resolveCart({
+      eventId, method,
+      items: [
+        { ticketTypeId: ticketTypeIds[0]!, quantity: 2 },
+        { ticketTypeId: ticketTypeIds[1]!, quantity: 3 },
+      ],
+    });
+
+    expect(genOnly.serviceFeeAmount).toBe(10); // 2 tickets * 5
+    expect(waivedOnly.serviceFeeAmount).toBe(0);
+    // The point of decision 1: a basket costs exactly what buying the tiers
+    // separately costs — no buyer is better or worse off for using the cart.
+    expect(together.serviceFeeAmount).toBe(genOnly.serviceFeeAmount + waivedOnly.serviceFeeAmount);
+    expect(together.amountCharged).toBe(together.faceTotal + together.serviceFeeAmount);
+  });
+
+  it('routes the fee to the organizer when the event absorbs it', async () => {
+    const { eventId, ticketTypeIds } = await seedEventWithTiers(TWO_TIERS, { organizerAbsorbsServiceFee: true });
+
+    const cart = await resolveCart({
+      eventId,
+      items: [{ ticketTypeId: ticketTypeIds[0]!, quantity: 2 }],
+      method: PaymentMethod.KESHLESS_WALLET,
+    });
+
+    expect(cart.serviceFeeAmount).toBe(0);
+    expect(cart.absorbedServiceFeeAmount).toBe(10);
+    expect(cart.amountCharged).toBe(cart.faceTotal); // buyer pays face
+  });
+
+  it('charges no fee on a free line', async () => {
+    const { eventId, ticketTypeIds } = await seedEventWithTiers([{ name: 'Free', price: 0, quantity: 10 }]);
+    const cart = await resolveCart({
+      eventId,
+      items: [{ ticketTypeId: ticketTypeIds[0]!, quantity: 2 }],
+      method: PaymentMethod.KESHLESS_WALLET,
+    });
+    expect(cart.serviceFeeAmount).toBe(0);
+    expect(cart.amountCharged).toBe(0);
+  });
+
+  it('matches computeServiceFee exactly for a one-line cart (equivalence)', async () => {
+    const { eventId, ticketTypeIds } = await seedEventWithTiers(TWO_TIERS);
+    const cfg = await PaymentConfigService.get();
+    const expected = computeServiceFee(200, 2, PaymentMethod.KESHLESS_WALLET, cfg, {});
+
+    const cart = await resolveCart({
+      eventId,
+      items: [{ ticketTypeId: ticketTypeIds[0]!, quantity: 2 }],
+      method: PaymentMethod.KESHLESS_WALLET,
+    });
+
+    expect(cart.serviceFeeAmount).toBe(expected.serviceFeeAmount);
+    expect(cart.amountCharged).toBe(expected.amountCharged);
   });
 });

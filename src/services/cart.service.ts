@@ -3,7 +3,8 @@ import { EventStatus } from '@interfaces/event.interface';
 import { PaymentMethod, TicketStatus } from '@interfaces/ticket.interface';
 import { assertCarrotTicketing } from '@utils/ticketingGuard.util';
 import { computeAvailable } from '@services/event.service';
-import { round2 } from '@utils/serviceFee.util';
+import { round2, computeServiceFee } from '@utils/serviceFee.util';
+import { PaymentConfigService } from '@services/paymentConfig.service';
 import { Ticket } from '@models/ticket.model';
 import { normalizePhone } from '@utils/phone.util';
 import type { CartLine, ResolvedCart, ResolvedLine } from '@interfaces/cart.interface';
@@ -174,13 +175,30 @@ export async function resolveCart(input: {
     phone: input.phone,
   });
 
+  // The fee is PER TICKET and `waiveServiceFee` is PER TIER, so it is computed
+  // once per line — with that line's own subtotal, quantity and waiver — and
+  // summed. That is the only arrangement where a basket costs exactly what
+  // buying each tier separately would: no buyer is better or worse off for
+  // using the cart, and a waived tier stays free of fees next to a paid one.
+  const feeCfg = await PaymentConfigService.get();
+  let serviceFeeAmount = 0;
+  let absorbedServiceFeeAmount = 0;
+  for (const line of lines) {
+    const fee = computeServiceFee(line.subtotal, line.quantity, input.method, feeCfg, {
+      waiveServiceFee: line.ticketType.waiveServiceFee,
+      absorbedByOrganizer: event.organizerAbsorbsServiceFee,
+    });
+    serviceFeeAmount = round2(serviceFeeAmount + fee.serviceFeeAmount);
+    absorbedServiceFeeAmount = round2(absorbedServiceFeeAmount + fee.absorbedServiceFeeAmount);
+  }
+
   return {
     event,
     lines,
     totalQuantity,
     faceTotal,
-    serviceFeeAmount: 0,
-    absorbedServiceFeeAmount: 0,
-    amountCharged: faceTotal,
+    serviceFeeAmount,
+    absorbedServiceFeeAmount,
+    amountCharged: round2(faceTotal + serviceFeeAmount),
   };
 }
