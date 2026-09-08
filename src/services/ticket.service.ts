@@ -259,6 +259,73 @@ export class TicketService {
   /**
    * Sell tickets (both cash and wallet payment)
    */
+
+  /**
+   * Mints an async rail's tickets once its payment has settled, from the
+   * composition snapshotted on the sale at checkout.
+   *
+   * The five async rails create a PENDING sale and mint later, from a
+   * webhook. Before `TicketSale.lines` existed they each reconstructed the
+   * order as `sale.quantity` tickets of ONE tier priced
+   * `sale.totalAmount / sale.quantity` — an AVERAGE, correct only when every
+   * ticket in the sale costs the same. On a mixed cart that mints the wrong
+   * tier at the wrong price and moves the wrong tier's inventory.
+   *
+   * A settled sale with no `lines` is an invariant violation, not a case to
+   * paper over: it means the sale was written by a build that predates this
+   * field and should have been resolved by the pre-deploy drain. It throws
+   * rather than minting a guess — silently minting the wrong ticket for real
+   * money is far worse than a loud failure an operator can act on.
+   */
+  private static async mintSettledSaleTickets(sale: ITicketSale): Promise<ITicket[]> {
+    const lines = sale.lines;
+    if (!lines || lines.length === 0) {
+      throw new Error(
+        `Sale ${String(sale._id)} settled with no line composition — refusing to mint. ` +
+        `This sale predates TicketSale.lines and should have been resolved by ` +
+        `src/scripts/releaseHeldReservations.ts before deploy.`
+      );
+    }
+
+    const tickets: ITicket[] = [];
+    for (const line of lines) {
+      for (let i = 0; i < line.quantity; i++) {
+        const t = this.buildTicket({
+          eventId: sale.eventId,
+          vendorId: sale.vendorId,
+          ticketType: line.ticketTypeName,
+          price: line.unitPrice,
+          customerName: sale.customerName,
+          customerPhone: sale.customerPhone,
+          customerEmail: sale.customerEmail,
+          buyerId: sale.buyerId,
+          saleId: sale._id,
+          // The sale already carries the currency stamped at initiate time
+          // (buildSaleSnapshot) — reuse it rather than re-deriving from event.
+          currency: sale.currency ?? 'SZL',
+        });
+        await t.save();
+        tickets.push(t);
+      }
+    }
+    return tickets;
+  }
+
+  /**
+   * Moves each tier's own sold counter for a settled async sale. Called once
+   * per line, so a mixed cart cannot credit every seat to one tier.
+   */
+  private static async applySoldCountsForSale(sale: ITicketSale): Promise<void> {
+    for (const line of sale.lines ?? []) {
+      await EventService.updateTicketsSold(
+        sale.eventId.toString(),
+        line.ticketTypeId,
+        line.quantity,
+        round2(line.unitPrice * line.quantity)
+      );
+    }
+  }
+
   static async sellTickets(params: SellTicketsParams): Promise<{
     sale: ITicketSale;
     tickets: ITicket[];
@@ -336,6 +403,17 @@ export class TicketService {
       const totalAmount = round2(
         resolvedLines.reduce((sum, l) => sum + l.ticketType.price * l.quantity, 0)
       );
+
+      // Composition snapshot persisted on the sale — see ticketSale.model's
+      // `lines`. sellTickets mints immediately so it does not need this
+      // itself, but every sale carrying it keeps reporting and refunds
+      // uniform across the sync and async rails.
+      const saleLines = resolvedLines.map((l) => ({
+        ticketTypeId: l.ticketTypeId,
+        ticketTypeName: l.ticketType.name,
+        unitPrice: l.ticketType.price,
+        quantity: l.quantity,
+      }));
 
       // Buyer-paid service fee (online only — callers that omit it charge face).
       // totalAmount stays face value; the wallet is debited amountCharged.
@@ -454,6 +532,7 @@ export class TicketService {
               vendorId,
               ticketIds: ticketsWithoutSession.map(t => t._id),
               quantity,
+              lines: saleLines,
               customerName,
               customerPhone,
               ...(customerEmail ? { customerEmail: customerEmail.toLowerCase() } : {}),
@@ -511,6 +590,7 @@ export class TicketService {
         vendorId,
         ticketIds: tickets.map(t => t._id),
         quantity,
+        lines: saleLines,
         customerName,
         customerPhone,
         ...(customerEmail ? { customerEmail: customerEmail.toLowerCase() } : {}),
@@ -1846,11 +1926,6 @@ export class TicketService {
       return { status: 'pending' };
     }
 
-    const reservation = await TicketReservation.findOne({ saleId: sale._id });
-    // These rails still hold exactly one tier (their carts arrive in slice 2),
-    // so the sole line IS the sale's tier. Slice 2 replaces this with a loop.
-    const ticketTypeId = reservation?.lines?.[0]?.ticketTypeId;
-
     if (status === 'FAILED') {
       const reason = typeof raw?.reason === 'string' ? raw.reason : undefined;
       console.warn('[momo finalize] ✗ MTN reports FAILED — releasing reservation', {
@@ -1913,39 +1988,15 @@ export class TicketService {
 
     // Mint tickets, convert reservation (reserved→sold), SMS
     const event = await Event.findById(sale.eventId);
-    const ticketTypeDoc = event?.ticketTypes.find((t: any) => t._id?.toString() === ticketTypeId);
-    const tickets: ITicket[] = [];
-    for (let i = 0; i < sale.quantity; i++) {
-      const t = this.buildTicket({
-        eventId: sale.eventId,
-        vendorId: sale.vendorId,
-        ticketType: ticketTypeDoc?.name || 'Ticket',
-        price: sale.totalAmount / sale.quantity,
-        customerName: sale.customerName,
-        customerPhone: sale.customerPhone,
-        customerEmail: sale.customerEmail,
-        buyerId: sale.buyerId,
-        saleId: sale._id,
-        // The sale already carries the currency stamped at initiate time
-        // (buildSaleSnapshot) — reuse it rather than re-deriving from event.
-        currency: sale.currency ?? 'SZL',
-      });
-      await t.save();
-      tickets.push(t);
-    }
+    // Mints from the sale's own composition snapshot, so every ticket carries
+    // ITS tier's name and the price the buyer actually agreed to.
+    const tickets: ITicket[] = await this.mintSettledSaleTickets(sale);
 
     claimed.ticketIds = tickets.map(t => t._id as mongoose.Types.ObjectId);
     await claimed.save();
 
     await ReservationService.confirm(sale._id.toString()); // reserved -= qty
-    if (ticketTypeId) {
-      await EventService.updateTicketsSold(
-        sale.eventId.toString(),
-        ticketTypeId,
-        sale.quantity,
-        sale.totalAmount
-      ); // sold += qty
-    }
+    await this.applySoldCountsForSale(sale); // sold += qty, per line
 
     if (event) {
       const summaries = tickets.map(t => ({
@@ -2003,11 +2054,6 @@ export class TicketService {
 
     if (outcome === 'pending') return { status: 'pending' };
 
-    const reservation = await TicketReservation.findOne({ saleId: sale._id });
-    // These rails still hold exactly one tier (their carts arrive in slice 2),
-    // so the sole line IS the sale's tier. Slice 2 replaces this with a loop.
-    const ticketTypeId = reservation?.lines?.[0]?.ticketTypeId;
-
     if (outcome === 'rejected') {
       await ReservationService.release(sale._id.toString());
       sale.paymentStatus = PaymentStatus.FAILED;
@@ -2048,39 +2094,15 @@ export class TicketService {
 
     // Mint tickets, confirm reservation (reserved→sold), best-effort SMS
     const event = await Event.findById(sale.eventId);
-    const ticketTypeDoc = event?.ticketTypes.find((t: any) => t._id?.toString() === ticketTypeId);
-    const tickets: ITicket[] = [];
-    for (let i = 0; i < sale.quantity; i++) {
-      const t = this.buildTicket({
-        eventId: sale.eventId,
-        vendorId: sale.vendorId,
-        ticketType: ticketTypeDoc?.name || 'Ticket',
-        price: sale.totalAmount / sale.quantity,
-        customerName: sale.customerName,
-        customerPhone: sale.customerPhone,
-        customerEmail: sale.customerEmail,
-        buyerId: sale.buyerId,
-        saleId: sale._id,
-        // The sale already carries the currency stamped at initiate time
-        // (buildSaleSnapshot) — reuse it rather than re-deriving from event.
-        currency: sale.currency ?? 'SZL',
-      });
-      await t.save();
-      tickets.push(t);
-    }
+    // Mints from the sale's own composition snapshot, so every ticket carries
+    // ITS tier's name and the price the buyer actually agreed to.
+    const tickets: ITicket[] = await this.mintSettledSaleTickets(sale);
 
     claimed.ticketIds = tickets.map(t => t._id as mongoose.Types.ObjectId);
     await claimed.save();
 
     await ReservationService.confirm(sale._id.toString()); // reserved -= qty
-    if (ticketTypeId) {
-      await EventService.updateTicketsSold(
-        sale.eventId.toString(),
-        ticketTypeId,
-        sale.quantity,
-        sale.totalAmount
-      ); // sold += qty
-    }
+    await this.applySoldCountsForSale(sale); // sold += qty, per line
 
     if (event) {
       const summaries = tickets.map(t => ({
@@ -2176,11 +2198,6 @@ export class TicketService {
 
     if (outcome === 'pending') return { status: 'pending' };
 
-    const reservation = await TicketReservation.findOne({ saleId: sale._id });
-    // These rails still hold exactly one tier (their carts arrive in slice 2),
-    // so the sole line IS the sale's tier. Slice 2 replaces this with a loop.
-    const ticketTypeId = reservation?.lines?.[0]?.ticketTypeId;
-
     if (outcome === 'rejected') {
       await ReservationService.release(sale._id.toString());
       sale.paymentStatus = PaymentStatus.FAILED;
@@ -2213,39 +2230,15 @@ export class TicketService {
 
     // Mint tickets, confirm reservation (reserved→sold), best-effort SMS
     const event = await Event.findById(sale.eventId);
-    const ticketTypeDoc = event?.ticketTypes.find((t: any) => t._id?.toString() === ticketTypeId);
-    const tickets: ITicket[] = [];
-    for (let i = 0; i < sale.quantity; i++) {
-      const t = this.buildTicket({
-        eventId: sale.eventId,
-        vendorId: sale.vendorId,
-        ticketType: ticketTypeDoc?.name || 'Ticket',
-        price: sale.totalAmount / sale.quantity,
-        customerName: sale.customerName,
-        customerPhone: sale.customerPhone,
-        customerEmail: sale.customerEmail,
-        buyerId: sale.buyerId,
-        saleId: sale._id,
-        // The sale already carries the currency stamped at initiate time
-        // (buildSaleSnapshot) — reuse it rather than re-deriving from event.
-        currency: sale.currency ?? 'SZL',
-      });
-      await t.save();
-      tickets.push(t);
-    }
+    // Mints from the sale's own composition snapshot, so every ticket carries
+    // ITS tier's name and the price the buyer actually agreed to.
+    const tickets: ITicket[] = await this.mintSettledSaleTickets(sale);
 
     claimed.ticketIds = tickets.map(t => t._id as mongoose.Types.ObjectId);
     await claimed.save();
 
     await ReservationService.confirm(sale._id.toString()); // reserved -= qty
-    if (ticketTypeId) {
-      await EventService.updateTicketsSold(
-        sale.eventId.toString(),
-        ticketTypeId,
-        sale.quantity,
-        sale.totalAmount
-      ); // sold += qty
-    }
+    await this.applySoldCountsForSale(sale); // sold += qty, per line
 
     if (event) {
       const summaries = tickets.map(t => ({
@@ -2525,11 +2518,6 @@ export class TicketService {
     // genuine payment.succeeded arriving afterwards can still mint.
     if (outcome === 'ignore') return { status: 'pending' };
 
-    const reservation = await TicketReservation.findOne({ saleId: sale._id });
-    // These rails still hold exactly one tier (their carts arrive in slice 2),
-    // so the sole line IS the sale's tier. Slice 2 replaces this with a loop.
-    const ticketTypeId = reservation?.lines?.[0]?.ticketTypeId;
-
     if (outcome === 'rejected') {
       await ReservationService.release(sale._id.toString());
       sale.paymentStatus = PaymentStatus.FAILED;
@@ -2568,39 +2556,15 @@ export class TicketService {
 
     // Mint tickets, confirm reservation (reserved→sold), best-effort SMS/email
     const eventDoc = await Event.findById(sale.eventId);
-    const ticketTypeDoc = eventDoc?.ticketTypes.find((t: any) => t._id?.toString() === ticketTypeId);
-    const tickets: ITicket[] = [];
-    for (let i = 0; i < sale.quantity; i++) {
-      const t = this.buildTicket({
-        eventId: sale.eventId,
-        vendorId: sale.vendorId,
-        ticketType: ticketTypeDoc?.name || 'Ticket',
-        price: sale.totalAmount / sale.quantity,
-        customerName: sale.customerName,
-        customerPhone: sale.customerPhone,
-        customerEmail: sale.customerEmail,
-        buyerId: sale.buyerId,
-        saleId: sale._id,
-        // The sale already carries the currency stamped at initiate time
-        // (buildSaleSnapshot) — reuse it rather than re-deriving from event.
-        currency: sale.currency ?? 'SZL',
-      });
-      await t.save();
-      tickets.push(t);
-    }
+    // Mints from the sale's own composition snapshot, so every ticket carries
+    // ITS tier's name and the price the buyer actually agreed to.
+    const tickets: ITicket[] = await this.mintSettledSaleTickets(sale);
 
     claimed.ticketIds = tickets.map(t => t._id as mongoose.Types.ObjectId);
     await claimed.save();
 
     await ReservationService.confirm(sale._id.toString()); // reserved -= qty
-    if (ticketTypeId) {
-      await EventService.updateTicketsSold(
-        sale.eventId.toString(),
-        ticketTypeId,
-        sale.quantity,
-        sale.totalAmount
-      ); // sold += qty
-    }
+    await this.applySoldCountsForSale(sale); // sold += qty, per line
 
     if (eventDoc) {
       const summaries = tickets.map(t => ({
@@ -2892,11 +2856,6 @@ export class TicketService {
     // genuine payment.succeeded arriving afterwards can still mint.
     if (outcome === 'ignore') return { status: 'pending' };
 
-    const reservation = await TicketReservation.findOne({ saleId: sale._id });
-    // These rails still hold exactly one tier (their carts arrive in slice 2),
-    // so the sole line IS the sale's tier. Slice 2 replaces this with a loop.
-    const ticketTypeId = reservation?.lines?.[0]?.ticketTypeId;
-
     if (outcome === 'rejected') {
       await ReservationService.release(sale._id.toString());
       sale.paymentStatus = PaymentStatus.FAILED;
@@ -2939,39 +2898,15 @@ export class TicketService {
 
     // Mint tickets, confirm reservation (reserved→sold), best-effort SMS/email
     const eventDoc = await Event.findById(sale.eventId);
-    const ticketTypeDoc = eventDoc?.ticketTypes.find((t: any) => t._id?.toString() === ticketTypeId);
-    const tickets: ITicket[] = [];
-    for (let i = 0; i < sale.quantity; i++) {
-      const t = this.buildTicket({
-        eventId: sale.eventId,
-        vendorId: sale.vendorId,
-        ticketType: ticketTypeDoc?.name || 'Ticket',
-        price: sale.totalAmount / sale.quantity,
-        customerName: sale.customerName,
-        customerPhone: sale.customerPhone,
-        customerEmail: sale.customerEmail,
-        buyerId: sale.buyerId,
-        saleId: sale._id,
-        // The sale already carries the currency stamped at initiate time
-        // (buildSaleSnapshot) — reuse it rather than re-deriving from event.
-        currency: sale.currency ?? 'SZL',
-      });
-      await t.save();
-      tickets.push(t);
-    }
+    // Mints from the sale's own composition snapshot, so every ticket carries
+    // ITS tier's name and the price the buyer actually agreed to.
+    const tickets: ITicket[] = await this.mintSettledSaleTickets(sale);
 
     claimed.ticketIds = tickets.map(t => t._id as mongoose.Types.ObjectId);
     await claimed.save();
 
     await ReservationService.confirm(sale._id.toString()); // reserved -= qty
-    if (ticketTypeId) {
-      await EventService.updateTicketsSold(
-        sale.eventId.toString(),
-        ticketTypeId,
-        sale.quantity,
-        sale.totalAmount
-      ); // sold += qty
-    }
+    await this.applySoldCountsForSale(sale); // sold += qty, per line
 
     if (eventDoc) {
       const summaries = tickets.map(t => ({

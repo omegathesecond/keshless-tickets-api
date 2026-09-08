@@ -204,6 +204,8 @@ async function seedPendingCardSale(overrides?: { paymentStatus?: PaymentStatus }
     vendorId,
     ticketIds: [],
     quantity: 1,
+    // Composition snapshot the finalizer mints from — see TicketSale.lines.
+    lines: [{ ticketTypeId, ticketTypeName: 'General', unitPrice: 50, quantity: 1 }],
     customerName: 'Test Buyer',
     customerPhone: '+26878422613',
     totalAmount: 50,
@@ -222,12 +224,11 @@ async function seedPendingCardSale(overrides?: { paymentStatus?: PaymentStatus }
     // reservationExpiresAt omitted — not required for finalize tests
   });
 
-  // Seed a TicketReservation so finalizeSale can find ticketTypeId
+  // Seed a TicketReservation so finalize can confirm/release the hold.
   const { TicketReservation } = await import('@models/ticketReservation.model');
   await TicketReservation.create({
     eventId: event._id,
-    ticketTypeId,
-    quantity: 1,
+    lines: [{ ticketTypeId, quantity: 1 }],
     saleId: sale._id.toString(),
     expiresAt: new Date(Date.now() + 15 * 60_000),
     status: 'held',

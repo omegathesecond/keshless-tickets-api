@@ -95,6 +95,9 @@ export interface ITicketSale extends Document {
 
   // Tickets Sold
   ticketIds: Types.ObjectId[]; // Array of ticket IDs
+  /** Composition snapshot — see the model for why the async rails need it.
+   *  Absent on sales written before multi-tier checkout. */
+  lines?: Array<{ ticketTypeId: string; ticketTypeName: string; unitPrice: number; quantity: number }>;
   quantity: number;
 
   // Customer Info

@@ -32,6 +32,30 @@ const ticketSaleSchema = new Schema<ITicketSale>({
     required: [true, 'Quantity is required'],
     min: [1, 'Quantity must be at least 1']
   },
+  /**
+   * What this sale is COMPOSED of, snapshotted at checkout: one entry per
+   * tier, with the price as it stood when the buyer agreed to it.
+   *
+   * Load-bearing for the async rails (MoMo, Peach, Yoco, YeboPay, DeltaPay),
+   * which create the sale now and mint from a webhook later. Without it a
+   * finalizer can only reconstruct `quantity` tickets of one tier at
+   * `totalAmount / quantity` — an AVERAGE price, which is right only when
+   * every ticket costs the same, and silently wrong for a mixed cart.
+   * Re-reading the tier at finalize is not an alternative: the organizer may
+   * have edited its price in between, and the buyer agreed to the old one.
+   *
+   * Absent on sales written before multi-tier checkout; those all predate any
+   * mixed cart, so nothing reads this without checking.
+   */
+  lines: {
+    type: [new Schema({
+      ticketTypeId: { type: String, required: true },
+      ticketTypeName: { type: String, required: true },
+      unitPrice: { type: Number, required: true, min: 0 },
+      quantity: { type: Number, required: true, min: 1 },
+    }, { _id: false })],
+    default: undefined,
+  },
 
   // Customer Info
   customerName: {
