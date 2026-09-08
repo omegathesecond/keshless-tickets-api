@@ -6,6 +6,7 @@ import { getObject, putObject, publicUrl } from './r2';
 import { buildRenditionArgs, buildPosterArgs, runFfmpeg, buildProbeArgs, runProbe, parseProbe } from './ffmpeg';
 import { connect, Update, StoryTarget } from './db';
 import { renditionKeyPrefix, readyUpdateOps, failedUpdateOps, type MediaCollection } from './mediaTarget';
+import { applyResult } from './writeResult';
 
 const app = express();
 app.use(express.json());
@@ -40,9 +41,16 @@ async function transcode(updateId: string, rawKey: string, collection: MediaColl
     await putObject(k720, await fs.readFile(p720), 'video/mp4');
     await putObject(k480, await fs.readFile(p480), 'video/mp4');
     await putObject(kp, await fs.readFile(pj), 'image/jpeg');
-    await Model.updateOne({ _id: updateId }, { $set: readyUpdateOps(collection, { url: publicUrl(k720), url480: publicUrl(k480), poster: publicUrl(kp), width, height, durationSec }) });
+    await applyResult(Model, updateId, collection, readyUpdateOps(collection, { url: publicUrl(k720), url480: publicUrl(k480), poster: publicUrl(kp), width, height, durationSec }));
   } catch (err: any) {
-    await Model.updateOne({ _id: updateId }, { $set: failedUpdateOps(collection, err?.message?.slice(0, 400) || 'transcode failed') });
+    // The failure write gets the same zero-match guard, but its own throw is
+    // swallowed and logged: we are already unwinding a real error, and
+    // replacing it with "couldn't record the error" would lose the cause.
+    try {
+      await applyResult(Model, updateId, collection, failedUpdateOps(collection, err?.message?.slice(0, 400) || 'transcode failed'));
+    } catch (writeErr: any) {
+      console.error('could not record transcode failure:', writeErr?.message);
+    }
     throw err;
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
