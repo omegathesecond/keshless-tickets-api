@@ -14,10 +14,11 @@ export type FeedSlide =
   | { type: 'event'; id: string; sortAt: string; [k: string]: any };
 
 interface FeedOpts { tab: 'for-you' | 'following' | 'events'; cursor?: string; actor?: SocialActor; limit?: number; category?: string; }
-/** `u`/`e` are the recency/skip cursors 'following' and 'events' still use.
- *  `s` ("seen") is 'for-you' only: ids already served THIS random walk, so a
- *  later page's $sample never repeats one — see the for-you branch below. */
-interface Cursor { u?: string; e?: number; s?: string[]; }
+/** `e` is the $skip-based event cursor. `s` ("seen") covers update ids already
+ *  served THIS random walk — every tab with update slides ('for-you' and
+ *  'following') now samples them via $sample, so a later page's $nin
+ *  exclusion is what keeps it from ever repeating one. */
+interface Cursor { e?: number; s?: string[]; }
 
 function decode(cursor?: string): Cursor { if (!cursor) return {}; try { return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')); } catch { return {}; } }
 function encode(c: Cursor): string { return Buffer.from(JSON.stringify(c)).toString('base64url'); }
@@ -71,20 +72,20 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
   let updates: any[];
   if (opts.tab === 'events') {
     updates = [];
-  } else if (opts.tab === 'for-you') {
-    // Discover randomizes across the ENTIRE active pool, not just a recency
-    // slice — a plain createdAt sort could only ever rotate the newest posts
-    // into view. `$sample` draws uniformly from every post the query matches,
-    // so a months-old post can land at the very top exactly as often as
-    // yesterday's, and a fresh mount/reload (no cursor) always re-samples the
-    // whole pool from scratch. `s` excludes ids this random walk already
-    // served so paging in never repeats one.
+  } else {
+    // Both 'for-you' and 'following' randomize across the ENTIRE matching
+    // pool, not just a recency slice — a plain createdAt sort could only ever
+    // rotate the newest posts into view. `$sample` draws uniformly from every
+    // post the query matches, so a months-old post from someone you follow
+    // lands in the mix exactly as often as yesterday's, and a fresh
+    // mount/reload (no cursor) always re-samples the whole pool from scratch
+    // — a different selection AND ordering every refresh. `s` excludes ids
+    // this random walk already served so paging in never repeats one, and
+    // (since it's keyed per getFeed call, not per tab) covers a session that
+    // hands off from 'following' to 'for-you' too.
     const seenIds = (cur.s ?? []).map((id) => new Types.ObjectId(id));
     if (seenIds.length) updateQuery._id = { $nin: seenIds };
     updates = await Update.aggregate([{ $match: updateQuery }, { $sample: { size: limit } }]);
-  } else {
-    if (cur.u) updateQuery.createdAt = { $lt: new Date(cur.u) };
-    updates = await Update.find(updateQuery).sort({ createdAt: -1 }).limit(limit).lean();
   }
 
   const eventSkip = cur.e ?? 0;
@@ -151,17 +152,12 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
   const consumedEventCount = items.filter((i) => i.type === 'event').length;
 
   const next: Cursor = {};
-  if (opts.tab === 'for-you') {
-    // Accumulate every id served across this random walk (not just this
-    // page) so a later page's $nin exclusion still covers earlier pages too.
-    const newIds = items.filter((i) => i.type === 'update').map((i) => i.id);
-    const merged = [...(cur.s ?? []), ...newIds];
-    if (merged.length) next.s = merged;
-  } else {
-    const consumedUpdateAt = items.filter((i) => i.type === 'update').slice(-1)[0]?.sortAt;
-    if (consumedUpdateAt) next.u = consumedUpdateAt;
-    else if (cur.u) next.u = cur.u;
-  }
+  // Accumulate every update id served across this random walk (not just this
+  // page) so a later page's $nin exclusion still covers earlier pages too.
+  // The 'events' tab never produces update items, so this is a no-op there.
+  const newIds = items.filter((i) => i.type === 'update').map((i) => i.id);
+  const merged = [...(cur.s ?? []), ...newIds];
+  if (merged.length) next.s = merged;
   if (consumedEventCount) next.e = eventSkip + consumedEventCount;
   else if (cur.e) next.e = cur.e;
 
