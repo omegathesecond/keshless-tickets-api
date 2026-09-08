@@ -68,8 +68,7 @@ describe('ReservationService.reserve — missing event/ticketType', () => {
     await expect(
       ReservationService.reserve({
         eventId: fakeEventId,
-        ticketTypeId,
-        quantity: 1,
+        lines: [{ ticketTypeId, quantity: 1 }],
         saleId,
         ttlMs: 300_000,
       })
@@ -88,8 +87,7 @@ describe('ReservationService.reserve — missing event/ticketType', () => {
     await expect(
       ReservationService.reserve({
         eventId,
-        ticketTypeId: fakeTicketTypeId,
-        quantity: 1,
+        lines: [{ ticketTypeId: fakeTicketTypeId, quantity: 1 }],
         saleId,
         ttlMs: 300_000,
       })
@@ -107,8 +105,7 @@ describe('ReservationService.reserve', () => {
 
     const { reservationId } = await ReservationService.reserve({
       eventId,
-      ticketTypeId,
-      quantity: 3,
+      lines: [{ ticketTypeId, quantity: 3 }],
       saleId,
       ttlMs: 300_000,
     });
@@ -128,8 +125,7 @@ describe('ReservationService.release', () => {
 
     await ReservationService.reserve({
       eventId,
-      ticketTypeId,
-      quantity: 3,
+      lines: [{ ticketTypeId, quantity: 3 }],
       saleId,
       ttlMs: 300_000,
     });
@@ -150,8 +146,7 @@ describe('ReservationService.sweepExpired', () => {
     // create reservation with negative ttl so it is already expired
     await ReservationService.reserve({
       eventId,
-      ticketTypeId,
-      quantity: 3,
+      lines: [{ ticketTypeId, quantity: 3 }],
       saleId,
       ttlMs: -1000, // already expired
     });

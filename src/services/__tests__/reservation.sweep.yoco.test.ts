@@ -54,8 +54,7 @@ async function seedLapsedSale(paymentMethod: PaymentMethod) {
 
   await ReservationService.reserve({
     eventId: event._id.toString(),
-    ticketTypeId,
-    quantity: 3,
+    lines: [{ ticketTypeId, quantity: 3 }],
     saleId: sale._id.toString(),
     ttlMs: -1000, // already expired
   });

@@ -1329,8 +1329,9 @@ export class TicketService {
     // 2) Reserve inventory
     const { expiresAt } = await ReservationService.reserve({
       eventId: p.eventId,
-      ticketTypeId: p.ticketTypeId,
-      quantity: p.quantity,
+      // One-element array: these rails still take a single tier; their carts
+      // arrive in slice 2, when this becomes a real multi-line hold.
+      lines: [{ ticketTypeId: p.ticketTypeId, quantity: p.quantity }],
       saleId: sale._id.toString(),
       ttlMs: this.MOMO_TTL_MS,
     });
@@ -1489,8 +1490,9 @@ export class TicketService {
     // 2) Reserve inventory
     const { expiresAt } = await ReservationService.reserve({
       eventId: p.eventId,
-      ticketTypeId: p.ticketTypeId,
-      quantity: p.quantity,
+      // One-element array: these rails still take a single tier; their carts
+      // arrive in slice 2, when this becomes a real multi-line hold.
+      lines: [{ ticketTypeId: p.ticketTypeId, quantity: p.quantity }],
       saleId: sale._id.toString(),
       ttlMs: this.CARD_TTL_MS,
     });
@@ -1644,8 +1646,9 @@ export class TicketService {
     // 2) Reserve inventory
     const { expiresAt } = await ReservationService.reserve({
       eventId: p.eventId,
-      ticketTypeId: p.ticketTypeId,
-      quantity: p.quantity,
+      // One-element array: these rails still take a single tier; their carts
+      // arrive in slice 2, when this becomes a real multi-line hold.
+      lines: [{ ticketTypeId: p.ticketTypeId, quantity: p.quantity }],
       saleId: sale._id.toString(),
       ttlMs: this.DELTAPAY_TTL_MS,
     });
@@ -1862,7 +1865,9 @@ export class TicketService {
     }
 
     const reservation = await TicketReservation.findOne({ saleId: sale._id });
-    const ticketTypeId = reservation?.ticketTypeId;
+    // These rails still hold exactly one tier (their carts arrive in slice 2),
+    // so the sole line IS the sale's tier. Slice 2 replaces this with a loop.
+    const ticketTypeId = reservation?.lines?.[0]?.ticketTypeId;
 
     if (status === 'FAILED') {
       const reason = typeof raw?.reason === 'string' ? raw.reason : undefined;
@@ -2017,7 +2022,9 @@ export class TicketService {
     if (outcome === 'pending') return { status: 'pending' };
 
     const reservation = await TicketReservation.findOne({ saleId: sale._id });
-    const ticketTypeId = reservation?.ticketTypeId;
+    // These rails still hold exactly one tier (their carts arrive in slice 2),
+    // so the sole line IS the sale's tier. Slice 2 replaces this with a loop.
+    const ticketTypeId = reservation?.lines?.[0]?.ticketTypeId;
 
     if (outcome === 'rejected') {
       await ReservationService.release(sale._id.toString());
@@ -2188,7 +2195,9 @@ export class TicketService {
     if (outcome === 'pending') return { status: 'pending' };
 
     const reservation = await TicketReservation.findOne({ saleId: sale._id });
-    const ticketTypeId = reservation?.ticketTypeId;
+    // These rails still hold exactly one tier (their carts arrive in slice 2),
+    // so the sole line IS the sale's tier. Slice 2 replaces this with a loop.
+    const ticketTypeId = reservation?.lines?.[0]?.ticketTypeId;
 
     if (outcome === 'rejected') {
       await ReservationService.release(sale._id.toString());
@@ -2425,8 +2434,9 @@ export class TicketService {
     // 2) Reserve inventory
     const { expiresAt } = await ReservationService.reserve({
       eventId: p.eventId,
-      ticketTypeId: p.ticketTypeId,
-      quantity: p.quantity,
+      // One-element array: these rails still take a single tier; their carts
+      // arrive in slice 2, when this becomes a real multi-line hold.
+      lines: [{ ticketTypeId: p.ticketTypeId, quantity: p.quantity }],
       saleId: sale._id.toString(),
       ttlMs: this.YOCO_TTL_MS,
     });
@@ -2534,7 +2544,9 @@ export class TicketService {
     if (outcome === 'ignore') return { status: 'pending' };
 
     const reservation = await TicketReservation.findOne({ saleId: sale._id });
-    const ticketTypeId = reservation?.ticketTypeId;
+    // These rails still hold exactly one tier (their carts arrive in slice 2),
+    // so the sole line IS the sale's tier. Slice 2 replaces this with a loop.
+    const ticketTypeId = reservation?.lines?.[0]?.ticketTypeId;
 
     if (outcome === 'rejected') {
       await ReservationService.release(sale._id.toString());
@@ -2784,8 +2796,9 @@ export class TicketService {
     // 2) Reserve inventory
     const { expiresAt } = await ReservationService.reserve({
       eventId: p.eventId,
-      ticketTypeId: p.ticketTypeId,
-      quantity: p.quantity,
+      // One-element array: these rails still take a single tier; their carts
+      // arrive in slice 2, when this becomes a real multi-line hold.
+      lines: [{ ticketTypeId: p.ticketTypeId, quantity: p.quantity }],
       saleId: sale._id.toString(),
       ttlMs: this.YEBOPAY_TTL_MS,
     });
@@ -2898,7 +2911,9 @@ export class TicketService {
     if (outcome === 'ignore') return { status: 'pending' };
 
     const reservation = await TicketReservation.findOne({ saleId: sale._id });
-    const ticketTypeId = reservation?.ticketTypeId;
+    // These rails still hold exactly one tier (their carts arrive in slice 2),
+    // so the sole line IS the sale's tier. Slice 2 replaces this with a loop.
+    const ticketTypeId = reservation?.lines?.[0]?.ticketTypeId;
 
     if (outcome === 'rejected') {
       await ReservationService.release(sale._id.toString());

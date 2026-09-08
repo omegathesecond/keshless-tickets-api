@@ -15,17 +15,18 @@ async function adjustReserved(eventId: unknown, ticketTypeId: string, delta: num
 export class ReservationService {
   static async reserve(p: {
     eventId: string;
-    ticketTypeId: string;
-    quantity: number;
+    /** One entry per tier. A single-tier sale passes a one-element array. */
+    lines: Array<{ ticketTypeId: string; quantity: number }>;
     saleId: string;
     ttlMs: number;
   }): Promise<{ reservationId: string; expiresAt: Date }> {
     const expiresAt = new Date(Date.now() + p.ttlMs);
-    await adjustReserved(p.eventId, p.ticketTypeId, +p.quantity);
+    for (const line of p.lines) {
+      await adjustReserved(p.eventId, line.ticketTypeId, +line.quantity);
+    }
     const r = await TicketReservation.create({
       eventId: p.eventId,
-      ticketTypeId: p.ticketTypeId,
-      quantity: p.quantity,
+      lines: p.lines,
       saleId: p.saleId,
       expiresAt,
       status: 'held',
@@ -36,7 +37,9 @@ export class ReservationService {
   static async confirm(saleId: string): Promise<void> {
     const r = await TicketReservation.findOne({ saleId, status: 'held' });
     if (!r) return;
-    await adjustReserved(r.eventId, r.ticketTypeId, -r.quantity);
+    for (const line of r.lines) {
+      await adjustReserved(r.eventId, line.ticketTypeId, -line.quantity);
+    }
     r.status = 'confirmed';
     await r.save();
   }
@@ -44,7 +47,9 @@ export class ReservationService {
   static async release(saleId: string): Promise<void> {
     const r = await TicketReservation.findOne({ saleId, status: 'held' });
     if (!r) return;
-    await adjustReserved(r.eventId, r.ticketTypeId, -r.quantity);
+    for (const line of r.lines) {
+      await adjustReserved(r.eventId, line.ticketTypeId, -line.quantity);
+    }
     r.status = 'released';
     await r.save();
   }
@@ -83,7 +88,9 @@ export class ReservationService {
     let n = 0;
     for (const r of lapsed) {
       try {
-        await adjustReserved(r.eventId, r.ticketTypeId, -r.quantity);
+        for (const line of r.lines) {
+          await adjustReserved(r.eventId, line.ticketTypeId, -line.quantity);
+        }
         r.status = 'released';
         await r.save();
         await TicketSale.updateOne(
