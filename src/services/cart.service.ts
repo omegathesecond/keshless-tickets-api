@@ -1,9 +1,11 @@
 import { Event } from '@models/event.model';
 import { EventStatus } from '@interfaces/event.interface';
-import { PaymentMethod } from '@interfaces/ticket.interface';
+import { PaymentMethod, TicketStatus } from '@interfaces/ticket.interface';
 import { assertCarrotTicketing } from '@utils/ticketingGuard.util';
 import { computeAvailable } from '@services/event.service';
 import { round2 } from '@utils/serviceFee.util';
+import { Ticket } from '@models/ticket.model';
+import { normalizePhone } from '@utils/phone.util';
 import type { CartLine, ResolvedCart, ResolvedLine } from '@interfaces/cart.interface';
 
 /**
@@ -26,6 +28,47 @@ export function mergeCartLines(items: CartLine[]): CartLine[] {
     byTier.set(item.ticketTypeId, (byTier.get(item.ticketTypeId) ?? 0) + qty);
   }
   return [...byTier].map(([ticketTypeId, quantity]) => ({ ticketTypeId, quantity }));
+}
+
+/**
+ * `maxTicketsPerAccount` is a per-EVENT cap, so it must be measured against the
+ * buyer's existing tickets PLUS every line in this cart at once. Checking it
+ * per line is the bypass multi-tier introduces: a 4-ticket cap on a nine-tier
+ * event would otherwise permit 36.
+ *
+ * Skipped when the organizer set no cap, or when the caller has no identity to
+ * bind (POS walk-up, wristband batch, reseller allocation) — an account rule
+ * cannot constrain someone with no account and no phone.
+ */
+async function assertWithinAccountCap(p: {
+  eventId: string;
+  cap?: number;
+  requested: number;
+  buyerId?: string;
+  phone?: string;
+}): Promise<void> {
+  const { cap } = p;
+  if (typeof cap !== 'number' || cap <= 0) return;
+
+  const identityClauses: Array<Record<string, unknown>> = [];
+  if (p.buyerId) identityClauses.push({ buyerId: p.buyerId });
+  const normPhone = p.phone ? normalizePhone(p.phone) : '';
+  if (normPhone) identityClauses.push({ customerPhone: normPhone });
+  if (identityClauses.length === 0) return;
+
+  const held = await Ticket.countDocuments({
+    eventId: p.eventId,
+    status: { $nin: [TicketStatus.REFUNDED, TicketStatus.CANCELLED] },
+    $or: identityClauses,
+  });
+
+  if (held + p.requested > cap) {
+    throw new Error(
+      cap === 1
+        ? "You already have your ticket for this event — it's limited to one per person."
+        : `This event is limited to ${cap} tickets per person; you already have ${held}.`
+    );
+  }
 }
 
 /**
@@ -76,6 +119,14 @@ export async function resolveCart(input: {
 
   const faceTotal = round2(lines.reduce((sum, l) => sum + l.subtotal, 0));
   const totalQuantity = lines.reduce((sum, l) => sum + l.quantity, 0);
+
+  await assertWithinAccountCap({
+    eventId: input.eventId,
+    cap: event.maxTicketsPerAccount,
+    requested: totalQuantity,
+    buyerId: input.buyerId,
+    phone: input.phone,
+  });
 
   return {
     event,

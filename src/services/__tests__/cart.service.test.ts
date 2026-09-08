@@ -10,7 +10,8 @@ import { connectTestDb, clearTestDb, disconnectTestDb } from '../../__tests__/he
 import { seedEventWithTiers, type SeedTierInput } from '../../__tests__/helpers/fixtures';
 import { resolveCart, mergeCartLines } from '@services/cart.service';
 import { EventStatus } from '@interfaces/event.interface';
-import { PaymentMethod } from '@interfaces/ticket.interface';
+import { PaymentMethod, TicketStatus } from '@interfaces/ticket.interface';
+import { Ticket } from '@models/ticket.model';
 
 beforeAll(connectTestDb);
 afterEach(async () => { await clearTestDb(); });
@@ -106,5 +107,93 @@ describe('resolveCart — line validation', () => {
       items: [{ ticketTypeId: event.ticketTypes[0]!._id!.toString(), quantity: 1 }],
       method: PaymentMethod.KESHLESS_WALLET,
     })).rejects.toThrow(/not available|draft/i);
+  });
+});
+
+describe('resolveCart — per-account cap', () => {
+  it('sums the WHOLE cart against the cap, not each line', async () => {
+    const { eventId, ticketTypeIds } = await seedEventWithTiers(TWO_TIERS, { maxTicketsPerAccount: 3 });
+
+    // 2 + 2 = 4 > cap of 3, though NEITHER line alone exceeds it.
+    await expect(resolveCart({
+      eventId,
+      items: [
+        { ticketTypeId: ticketTypeIds[0]!, quantity: 2 },
+        { ticketTypeId: ticketTypeIds[1]!, quantity: 2 },
+      ],
+      method: PaymentMethod.KESHLESS_WALLET,
+      buyerId: new mongoose.Types.ObjectId().toString(),
+    })).rejects.toThrow(/limited to 3/i);
+  });
+
+  it('counts tickets the buyer already holds for this event', async () => {
+    const { eventId, ticketTypeIds, event } = await seedEventWithTiers(TWO_TIERS, { maxTicketsPerAccount: 2 });
+    const buyerId = new mongoose.Types.ObjectId();
+
+    await Ticket.create({
+      eventId: event._id, vendorId: event.vendorId, ticketType: 'General',
+      price: 100, buyerId, status: TicketStatus.SOLD,
+    });
+
+    await expect(resolveCart({
+      eventId,
+      items: [{ ticketTypeId: ticketTypeIds[0]!, quantity: 2 }],
+      method: PaymentMethod.KESHLESS_WALLET,
+      buyerId: buyerId.toString(),
+    })).rejects.toThrow(/limited to 2/i);
+  });
+
+  it('ignores refunded and cancelled tickets when counting', async () => {
+    const { eventId, ticketTypeIds, event } = await seedEventWithTiers(TWO_TIERS, { maxTicketsPerAccount: 1 });
+    const buyerId = new mongoose.Types.ObjectId();
+
+    await Ticket.create({
+      eventId: event._id, vendorId: event.vendorId, ticketType: 'General',
+      price: 100, buyerId, status: TicketStatus.REFUNDED,
+    });
+
+    const cart = await resolveCart({
+      eventId,
+      items: [{ ticketTypeId: ticketTypeIds[0]!, quantity: 1 }],
+      method: PaymentMethod.KESHLESS_WALLET,
+      buyerId: buyerId.toString(),
+    });
+    expect(cart.totalQuantity).toBe(1);
+  });
+
+  it('skips the cap for an anonymous caller (POS walk-up)', async () => {
+    const { eventId, ticketTypeIds } = await seedEventWithTiers(TWO_TIERS, { maxTicketsPerAccount: 1 });
+    const cart = await resolveCart({
+      eventId,
+      items: [{ ticketTypeId: ticketTypeIds[0]!, quantity: 5 }],
+      method: PaymentMethod.CASH,
+    });
+    expect(cart.totalQuantity).toBe(5);
+  });
+
+  it('treats an absent cap as unlimited', async () => {
+    const { eventId, ticketTypeIds } = await seedEventWithTiers(TWO_TIERS);
+    const cart = await resolveCart({
+      eventId,
+      items: [{ ticketTypeId: ticketTypeIds[0]!, quantity: 9 }],
+      method: PaymentMethod.KESHLESS_WALLET,
+      buyerId: new mongoose.Types.ObjectId().toString(),
+    });
+    expect(cart.totalQuantity).toBe(9);
+  });
+
+  it('binds the cap by phone when there is no buyerId', async () => {
+    const { eventId, ticketTypeIds, event } = await seedEventWithTiers(TWO_TIERS, { maxTicketsPerAccount: 1 });
+    await Ticket.create({
+      eventId: event._id, vendorId: event.vendorId, ticketType: 'General',
+      price: 100, customerPhone: '+26878422613', status: TicketStatus.SOLD,
+    });
+
+    await expect(resolveCart({
+      eventId,
+      items: [{ ticketTypeId: ticketTypeIds[0]!, quantity: 1 }],
+      method: PaymentMethod.KESHLESS_WALLET,
+      phone: '78422613', // same person, un-normalized
+    })).rejects.toThrow(/limited to one per person/i);
   });
 });
