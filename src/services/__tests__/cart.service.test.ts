@@ -10,7 +10,7 @@ import { connectTestDb, clearTestDb, disconnectTestDb } from '../../__tests__/he
 import { seedEventWithTiers, type SeedTierInput } from '../../__tests__/helpers/fixtures';
 import { resolveCart, mergeCartLines } from '@services/cart.service';
 import { EventStatus } from '@interfaces/event.interface';
-import { PaymentMethod, TicketStatus } from '@interfaces/ticket.interface';
+import { PaymentMethod, TicketStatus, SalesChannel } from '@interfaces/ticket.interface';
 import { Ticket } from '@models/ticket.model';
 import { PaymentConfigService } from '@services/paymentConfig.service';
 import { computeServiceFee } from '@utils/serviceFee.util';
@@ -358,5 +358,44 @@ describe('resolveCart — service fee', () => {
 
     expect(cart.serviceFeeAmount).toBe(expected.serviceFeeAmount);
     expect(cart.amountCharged).toBe(expected.amountCharged);
+  });
+});
+
+describe('resolveCart — channel', () => {
+  beforeEach(async () => { await PaymentConfigService.update({ keshlessServiceFee: 5 }); });
+
+  it('charges the buyer service fee on an ONLINE cart', async () => {
+    const { eventId, ticketTypeIds } = await seedEventWithTiers(TWO_TIERS);
+    const cart = await resolveCart({
+      eventId,
+      items: [{ ticketTypeId: ticketTypeIds[0]!, quantity: 2 }],
+      method: PaymentMethod.KESHLESS_WALLET,
+      channel: SalesChannel.ONLINE,
+    });
+    expect(cart.serviceFeeAmount).toBe(10);
+    expect(cart.amountCharged).toBe(210);
+  });
+
+  it('charges NO service fee off-line (box office / reseller sell at face)', async () => {
+    const { eventId, ticketTypeIds } = await seedEventWithTiers(TWO_TIERS);
+    const cart = await resolveCart({
+      eventId,
+      items: [{ ticketTypeId: ticketTypeIds[0]!, quantity: 2 }],
+      method: PaymentMethod.KESHLESS_WALLET,
+      channel: SalesChannel.RESELLER_POS,
+    });
+    expect(cart.serviceFeeAmount).toBe(0);
+    expect(cart.absorbedServiceFeeAmount).toBe(0);
+    expect(cart.amountCharged).toBe(cart.faceTotal);
+  });
+
+  it('defaults to ONLINE when no channel is given', async () => {
+    const { eventId, ticketTypeIds } = await seedEventWithTiers(TWO_TIERS);
+    const cart = await resolveCart({
+      eventId,
+      items: [{ ticketTypeId: ticketTypeIds[0]!, quantity: 2 }],
+      method: PaymentMethod.KESHLESS_WALLET,
+    });
+    expect(cart.serviceFeeAmount).toBe(10);
   });
 });

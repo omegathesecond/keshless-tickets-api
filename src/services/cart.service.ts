@@ -1,6 +1,6 @@
 import { Event } from '@models/event.model';
 import { EventStatus } from '@interfaces/event.interface';
-import { PaymentMethod, TicketStatus } from '@interfaces/ticket.interface';
+import { PaymentMethod, TicketStatus, SalesChannel } from '@interfaces/ticket.interface';
 import { assertCarrotTicketing } from '@utils/ticketingGuard.util';
 import { computeAvailable } from '@services/event.service';
 import { round2, computeServiceFee } from '@utils/serviceFee.util';
@@ -129,6 +129,13 @@ export async function resolveCart(input: {
   method: PaymentMethod;
   buyerId?: string;
   phone?: string;
+  /**
+   * Where the sale is happening. The buyer service fee is an ONLINE-checkout
+   * charge only — a box-office or reseller sale is rung at face — so this
+   * decides whether a fee applies at all. Defaults to ONLINE, which is what
+   * every buyer-facing caller is.
+   */
+  channel?: SalesChannel;
 }): Promise<ResolvedCart> {
   const items = mergeCartLines(input.items);
 
@@ -180,10 +187,14 @@ export async function resolveCart(input: {
   // summed. That is the only arrangement where a basket costs exactly what
   // buying each tier separately would: no buyer is better or worse off for
   // using the cart, and a waived tier stays free of fees next to a paid one.
+  // Off-line channels (box office, reseller POS, wristband batches) sell at
+  // face — the buyer service fee is an online-checkout charge. Skipping the
+  // whole loop here is what keeps a POS cart's total identical to today's.
+  const chargesServiceFee = (input.channel ?? SalesChannel.ONLINE) === SalesChannel.ONLINE;
   const feeCfg = await PaymentConfigService.get();
   let serviceFeeAmount = 0;
   let absorbedServiceFeeAmount = 0;
-  for (const line of lines) {
+  for (const line of chargesServiceFee ? lines : []) {
     const fee = computeServiceFee(line.subtotal, line.quantity, input.method, feeCfg, {
       waiveServiceFee: line.ticketType.waiveServiceFee,
       absorbedByOrganizer: event.organizerAbsorbsServiceFee,
