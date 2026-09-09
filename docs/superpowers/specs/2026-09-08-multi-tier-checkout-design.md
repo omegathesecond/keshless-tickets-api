@@ -60,8 +60,24 @@ cart, so nothing reads it without checking. It also makes a sale
 self-describing, which is where the dashboard's per-line breakdown (§6) now
 comes from, rather than being derived from `ticketIds`.
 
-A settled sale with no `lines[]` **throws** rather than minting a guess — see
-the cutover note in §4 for how in-flight sales are drained before deploy.
+A settled sale with no `lines[]` **throws** rather than minting a guess.
+
+**Cutover, revised (2026-09-09).** The original plan was to have each rail
+settle its outstanding sales before the deploy. Checking production first
+showed something better: every lines-less PENDING sale still has its
+`TicketReservation` — the row survives as `released`/`confirmed`, only the
+hold is gone — and it names the tier. With the tier plus the sale's own
+`quantity` and `totalAmount`, the composition is exact (these all predate
+multi-tier, so the unit price is a real price, not an average).
+
+So `src/scripts/backfillSaleLines.ts` **recovers** those sales instead of
+settling them. It adds a field describing what was already bought and touches
+no payment state — strictly safer than resolving real customer payments during
+a deploy window. It is idempotent, dry-run by default, and reports rather than
+guesses any sale whose tier cannot be recovered.
+
+Measured on production 2026-09-09: 12 lines-less PENDING sales, all 12
+recoverable; zero held reservations, so the hold-release step is a no-op.
 
 `sellTickets` having exactly four callers — `tickets.controller` (POS),
 `resellerSale.service`, `purchaseForCustomer`, `claimFreeTicket` — is what makes
