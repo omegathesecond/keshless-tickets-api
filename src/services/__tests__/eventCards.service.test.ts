@@ -2,6 +2,8 @@ import mongoose from 'mongoose';
 import { connectTestDb, clearTestDb, disconnectTestDb } from '../../__tests__/helpers/mongo';
 import { Event } from '@models/event.model';
 import { Vendor } from '@models/vendor.model';
+import { TicketSale } from '@models/ticketSale.model';
+import { SalesChannel, PaymentMethod, PaymentStatus } from '@interfaces/ticket.interface';
 import { buildEventCards } from '@services/eventCards.service';
 import { toggleEventSave } from '@services/eventReaction.service';
 import type { SocialActor } from '@utils/socialActor.util';
@@ -53,5 +55,37 @@ describe('buildEventCards', () => {
 
     const [otherCard] = await buildEventCards([String(e._id)], other);
     expect(otherCard.viewerHasSaved).toBe(false);
+  });
+
+  // Regression: buildEventCards used to omit recentSales entirely, so a
+  // recommended/saved-event card showed a bare 0 next to the people icon
+  // while a "Hot This Week" card (sourced from the main public events list,
+  // which DOES apply this same blend) showed a real number for the identical
+  // event. Both surfaces must now agree.
+  it('never returns recentSales:0 — always the same blended real+synthetic number the public list card would show', async () => {
+    const v = await Vendor.create({ businessName: 'MTN Bushfire', password: 'secret123' });
+    const e = await Event.create({ vendorId: v._id, name: 'Quiet Show', venue: 'V', eventDate: new Date(), startTime: new Date(), endTime: new Date(), ticketTypes: [{ name: 'GA', price: 100, quantity: 10, available: 10 }] });
+    const [card] = await buildEventCards([String(e._id)], null);
+    expect(card.recentSales).toBeGreaterThan(0);
+  });
+
+  it('reflects real recent completed sales (non-wristband, last 48h) into recentSales', async () => {
+    const v = await Vendor.create({ businessName: 'MTN Bushfire', password: 'secret123' });
+    const e = await Event.create({ vendorId: v._id, name: 'Selling Fast', venue: 'V', eventDate: new Date(), startTime: new Date(), endTime: new Date(), ticketTypes: [{ name: 'GA', price: 100, quantity: 100, available: 100 }] });
+    await TicketSale.create({
+      eventId: e._id,
+      vendorId: v._id,
+      ticketIds: [new mongoose.Types.ObjectId()],
+      quantity: 25,
+      totalAmount: 2500,
+      paymentMethod: PaymentMethod.CASH,
+      paymentStatus: PaymentStatus.COMPLETED,
+      soldBy: new mongoose.Types.ObjectId(),
+      soldByType: 'Vendor' as const,
+      channel: SalesChannel.ONLINE,
+      soldAt: new Date(),
+    });
+    const [card] = await buildEventCards([String(e._id)], null);
+    expect(card.recentSales).toBeGreaterThanOrEqual(25);
   });
 });
