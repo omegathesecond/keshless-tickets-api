@@ -149,29 +149,72 @@ const cartItemsSchema = Joi.array()
     }
     return value;
   })
-  .required();
+  .optional();
+
+
+/**
+ * TEMPORARY — multi-tier cutover compatibility. REMOVE once no traffic sends
+ * the legacy shape (watch for `[cart-compat]` in the logs).
+ *
+ * A checkout is two deploys — this API and the buyer bundle — and browsers
+ * hold the old bundle in cache across both. Requiring `items[]` outright would
+ * 400 every purchase made from a cached page, and would break in whichever
+ * order the two deploys landed. Accepting the legacy single-tier pair as well
+ * makes the deploy order irrelevant and the cutover invisible to buyers.
+ *
+ * It also keeps the surfaces that have NOT been migrated yet working
+ * unchanged: the Flutter POS, the reseller till and the dashboard's Sell
+ * Tickets page all still send one tier.
+ *
+ * This is deliberate backward-compatibility on a payment path, which is
+ * normally against house rules — it was weighed against a checkout outage and
+ * explicitly approved. It is one release long.
+ */
+const legacyTierFields = {
+  ticketTypeId: Joi.string().hex().length(24).optional(),
+  quantity: Joi.number().integer().min(1).max(MAX_TICKETS_PER_ORDER).optional(),
+};
+
+/**
+ * The cart for a validated purchase body, from either shape. Never guesses: a
+ * body carrying neither is a validation error the caller must see.
+ */
+function cartItemsFrom(value: Record<string, unknown>): Array<{ ticketTypeId: string; quantity: number }> {
+  const items = value['items'] as Array<{ ticketTypeId: string; quantity: number }> | undefined;
+  if (Array.isArray(items) && items.length > 0) return items;
+
+  const legacyTier = value['ticketTypeId'] as string | undefined;
+  if (legacyTier) {
+    console.warn('[cart-compat] legacy {ticketTypeId, quantity} purchase body — remove this path once it stops appearing');
+    return [{ ticketTypeId: legacyTier, quantity: (value['quantity'] as number | undefined) ?? 1 }];
+  }
+  throw new Error('Choose at least one ticket');
+}
 
 const cardInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
   items: cartItemsSchema,
+  ...legacyTierFields,
   customerName: Joi.string().max(100).optional(),
-});
+}).or('items', 'ticketTypeId');
 
 // Validation schema for DeltaPay hosted-checkout purchase initiation.
 // Same shape as card: DeltaPay collects the payer identifier on its own page.
 const deltapayInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
   items: cartItemsSchema,
+  ...legacyTierFields,
   customerName: Joi.string().max(100).optional(),
-});
+}).or('items', 'ticketTypeId');
 
 // Validation schema for Yoco hosted-checkout purchase initiation.
 // Same shape as card: Yoco collects the card details on its own page.
 const yocoInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
   items: cartItemsSchema,
+  ...legacyTierFields,
   customerName: Joi.string().max(100).optional(),
-});
+}).or('items', 'ticketTypeId');
 
 // Validation schema for YeboPay hosted-checkout purchase initiation.
 // Same shape as the other card rails: YeboPay collects the card details on its
@@ -179,16 +222,18 @@ const yocoInitiateSchema = Joi.object({
 const yebopayInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
   items: cartItemsSchema,
+  ...legacyTierFields,
   customerName: Joi.string().max(100).optional(),
-});
+}).or('items', 'ticketTypeId');
 
 // Validation schema for MTN MoMo purchase initiation
 const momoInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
   items: cartItemsSchema,
+  ...legacyTierFields,
   customerName: Joi.string().max(100).optional(),
   momoPhone: Joi.string().pattern(/^[0-9]{8,15}$/).required(),
-});
+}).or('items', 'ticketTypeId');
 
 // Free-ticket claim — no payment fields at all (a free tier has nothing to
 // charge). The tier being genuinely free is enforced SERVER-SIDE in
@@ -197,8 +242,9 @@ const momoInitiateSchema = Joi.object({
 const freeClaimSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
   items: cartItemsSchema,
+  ...legacyTierFields,
   customerName: Joi.string().max(100).optional().allow(''),
-});
+}).or('items', 'ticketTypeId');
 
 // Validation schemas
 // Exported so it's independently unit-testable (see
@@ -233,6 +279,7 @@ export const topicPostsQuerySchema = Joi.object({
 const publicPurchaseSchema = Joi.object({
   eventId: Joi.string().required().regex(/^[0-9a-fA-F]{24}$/),
   items: cartItemsSchema,
+  ...legacyTierFields,
   // The buyer's phone is NO LONGER taken from the body — it comes from the
   // OTP-verified buyer token (req.ticketsUser.userPhone). This guarantees
   // every ticket is tied to a phone the buyer actually controls, so it always
@@ -241,7 +288,7 @@ const publicPurchaseSchema = Joi.object({
   customerName: Joi.string().optional().max(100).trim().allow(''),
   keshlessCardNumber: Joi.string().required().length(8).alphanum().uppercase(),
   keshlessPin: Joi.string().optional().length(4).pattern(/^\d{4}$/)
-});
+}).or('items', 'ticketTypeId');
 
 export class PublicController {
   /**
@@ -783,12 +830,9 @@ export class PublicController {
         return ApiResponseUtil.error(res, error.details[0]?.message || 'Validation error', 400);
       }
 
-      const {
-        eventId,
-        items,
-        keshlessCardNumber,
-        keshlessPin
-      } = value;
+      const { eventId, keshlessCardNumber, keshlessPin } = value;
+      // Accepts the new cart or a legacy single-tier body — see cartItemsFrom.
+      const items = cartItemsFrom(value);
 
       // The buyer is authenticated (authenticateBuyer middleware). Identity is
       // resolved buyerId-primary (falling back to phone) — never a
@@ -844,7 +888,7 @@ export class PublicController {
 
       const result = await TicketService.claimFreeTicket({
         eventId: value.eventId,
-        items: value.items,
+        items: cartItemsFrom(value),
         customerPhone: buyer.phone,
         customerEmail: buyer.email,
         buyerId: String(buyer._id),
@@ -1026,6 +1070,8 @@ export class PublicController {
     try {
       const r = await TicketService.initiateMomoPurchase({
         ...value,
+        // Normalises a legacy single-tier body to a cart — see cartItemsFrom.
+        items: cartItemsFrom(value),
         customerPhone: buyer.phone,
         customerEmail: buyer.email,
         buyerId: String(buyer._id),
@@ -1085,6 +1131,8 @@ export class PublicController {
     try {
       const r = await TicketService.initiateCardPurchase({
         ...value,
+        // Normalises a legacy single-tier body to a cart — see cartItemsFrom.
+        items: cartItemsFrom(value),
         customerPhone: buyer.phone,
         customerEmail: buyer.email,
         buyerId: String(buyer._id),
@@ -1143,6 +1191,8 @@ export class PublicController {
     try {
       const r = await TicketService.initiateYocoPurchase({
         ...value,
+        // Normalises a legacy single-tier body to a cart — see cartItemsFrom.
+        items: cartItemsFrom(value),
         customerPhone: buyer.phone,
         customerEmail: buyer.email,
         buyerId: String(buyer._id),
@@ -1166,6 +1216,8 @@ export class PublicController {
     try {
       const r = await TicketService.initiateYeboPayPurchase({
         ...value,
+        // Normalises a legacy single-tier body to a cart — see cartItemsFrom.
+        items: cartItemsFrom(value),
         customerPhone: buyer.phone,
         customerEmail: buyer.email,
         buyerId: String(buyer._id),
@@ -1336,6 +1388,8 @@ export class PublicController {
     try {
       const r = await TicketService.initiateDeltapayPurchase({
         ...value,
+        // Normalises a legacy single-tier body to a cart — see cartItemsFrom.
+        items: cartItemsFrom(value),
         customerPhone: buyer.phone,
         customerEmail: buyer.email,
         buyerId: String(buyer._id),
