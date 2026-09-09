@@ -336,6 +336,39 @@ describe('PATCH /api/tickets/menu-orders/:id — fulfilment transitions', () => 
   });
 });
 
+describe('GET /api/public/my-menu-orders — the buyer\'s order history', () => {
+  it('only returns PAID orders — a pending/failed preorder is not a "successful purchase" yet', async () => {
+    const buyer = await seedBuyer();
+    const eventId = await eventWith(EventStatus.PUBLISHED);
+    const buyerId = buyer._id as mongoose.Types.ObjectId;
+
+    const paid = await paidOrder(eventId, buyerId, { orderId: 'MENU-PAID' });
+    await paidOrder(eventId, buyerId, { orderId: 'MENU-PENDING', paymentStatus: PaymentStatus.PENDING });
+    await paidOrder(eventId, buyerId, { orderId: 'MENU-FAILED', paymentStatus: PaymentStatus.FAILED });
+
+    const res = await request(app)
+      .get('/api/public/my-menu-orders')
+      .set('Authorization', `Bearer ${signBuyerToken(BUYER_PHONE)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].orderId).toBe(paid.orderId);
+  });
+
+  it('populates the event name/poster and vendor business name', async () => {
+    const buyer = await seedBuyer();
+    const eventId = await eventWith(EventStatus.PUBLISHED);
+    await paidOrder(eventId, buyer._id as mongoose.Types.ObjectId);
+
+    const res = await request(app)
+      .get('/api/public/my-menu-orders')
+      .set('Authorization', `Bearer ${signBuyerToken(BUYER_PHONE)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].eventId.name).toBe('Menu Night');
+  });
+});
+
 describe('POST /api/tickets/menu-orders/scan and /collect — QR collection scanner', () => {
   let eventId: string;
   let buyerId: mongoose.Types.ObjectId;
