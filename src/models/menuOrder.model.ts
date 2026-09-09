@@ -48,6 +48,11 @@ export interface IMenuOrder extends Document {
   notes?: string;
 
   paidAt?: Date;
+  // Set the moment a vendor scans the order's QR (orderId) and confirms
+  // collection — i.e. when fulfillmentStatus transitions to COLLECTED. Lets a
+  // re-scan of an already-redeemed code report "Order already collected at …"
+  // instead of just refusing the transition with no timestamp.
+  collectedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -91,6 +96,7 @@ const menuOrderSchema = new Schema<IMenuOrder>(
     notes: { type: String, trim: true, maxlength: 500 },
 
     paidAt: { type: Date },
+    collectedAt: { type: Date },
   },
   { timestamps: true },
 );

@@ -713,5 +713,9 @@ router.patch('/menu-items/:id', requireTicketsPermission(TicketsPermission.MANAG
 router.delete('/menu-items/:id', requireTicketsPermission(TicketsPermission.MANAGE_MENU), MenuAdminController.deleteItem);
 router.get('/events/:eventId/menu-orders', requireTicketsPermission(TicketsPermission.MANAGE_MENU), MenuAdminController.listOrders);
 router.patch('/menu-orders/:id', requireTicketsPermission(TicketsPermission.MANAGE_MENU), MenuAdminController.updateOrderFulfillment);
+// QR-based collection scanner: looks up/confirms by the human-readable orderId
+// (not the Mongo _id) that the buyer's QR code encodes.
+router.post('/menu-orders/scan', requireTicketsPermission(TicketsPermission.MANAGE_MENU), MenuAdminController.lookupOrderByCode);
+router.post('/menu-orders/collect', requireTicketsPermission(TicketsPermission.MANAGE_MENU), MenuAdminController.collectOrder);
 
 export default router;

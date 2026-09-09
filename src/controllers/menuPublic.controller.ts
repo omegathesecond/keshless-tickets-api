@@ -3,7 +3,7 @@ import { Event } from '@models/event.model';
 import { EventStatus } from '@interfaces/event.interface';
 import { MenuItem } from '@models/menuItem.model';
 import { MenuOrder } from '@models/menuOrder.model';
-import { PaymentMethod } from '@interfaces/ticket.interface';
+import { PaymentMethod, PaymentStatus } from '@interfaces/ticket.interface';
 import { PaymentConfigService } from '@services/paymentConfig.service';
 import { MenuOrderService } from '@services/menuOrder.service';
 import { ApiResponseUtil } from '@utils/apiResponse.util';
@@ -131,12 +131,29 @@ export class MenuPublicController {
     }
   }
 
-  /** GET /api/public/my-menu-orders — the signed-in buyer's preorder history */
+  /**
+   * GET /api/public/my-menu-orders — the signed-in buyer's preorder history,
+   * newest first, for the "My Orders" tab. Populates just enough of the event
+   * and vendor to render a card (name/poster/venue, business name) without a
+   * second round-trip per order — never anything payment- or PII-adjacent
+   * beyond what the buyer already owns.
+   *
+   * Only PAID orders are returned: "My Orders" is a record of successful
+   * purchases (and the QR it renders must not exist/work before payment is
+   * confirmed), not a place to see abandoned MoMo prompts or declined
+   * payments. A MoMo order that later completes appears once its status
+   * flips — nothing needs to change here for that.
+   */
   static async getMyOrders(req: Request, res: Response): Promise<any> {
     try {
       const buyer = await resolveBuyerFromRequest(req);
       if (!buyer) return ApiResponseUtil.unauthorized(res, 'Please sign in');
-      const orders = await MenuOrder.find({ buyerId: buyer._id }).sort({ createdAt: -1 }).limit(100).lean();
+      const orders = await MenuOrder.find({ buyerId: buyer._id, paymentStatus: PaymentStatus.COMPLETED })
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .populate('eventId', 'name posterUrl venue eventDate currency')
+        .populate('vendorId', 'businessName')
+        .lean();
       return ApiResponseUtil.success(res, orders);
     } catch (error: any) {
       return ApiResponseUtil.error(res, error.message || 'Failed to load orders');

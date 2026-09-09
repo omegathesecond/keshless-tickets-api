@@ -91,3 +91,10 @@ export const createMenuOrderSchema = Joi.object({
 export const updateMenuOrderFulfillmentSchema = Joi.object({
   fulfillmentStatus: Joi.string().valid('new', 'preparing', 'ready', 'collected', 'cancelled').required(),
 });
+
+/** The value encoded in the buyer's order QR is just order.orderId — no
+ *  payment or personal details, so a leaked/photographed code identifies an
+ *  order but exposes nothing sensitive. */
+export const scanMenuOrderSchema = Joi.object({
+  orderId: Joi.string().trim().min(1).required(),
+});
