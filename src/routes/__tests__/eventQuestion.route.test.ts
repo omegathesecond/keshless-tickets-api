@@ -207,6 +207,93 @@ describe('event Q&A routes', () => {
       .expect(404);
   });
 
+  describe('general "Chat with Everyone" posts (no event)', () => {
+    it('401s an anonymous attempt to post a general question', async () => {
+      await request(app).post('/api/community/questions').send({ body: 'Hey everyone!' }).expect(401);
+    });
+
+    it('400s an empty-body general post', async () => {
+      await seedBuyer();
+      await request(app)
+        .post('/api/community/questions')
+        .set('Authorization', `Bearer ${signBuyerToken(PHONE)}`)
+        .send({ body: '   ' })
+        .expect(400);
+    });
+
+    it('posts a general question with eventId: null, appears in the cross-event feed the same way', async () => {
+      await seedBuyer();
+      const auth = `Bearer ${signBuyerToken(PHONE)}`;
+
+      const created = await request(app)
+        .post('/api/community/questions')
+        .set('Authorization', auth)
+        .send({ body: 'Hey everyone, what a night!' })
+        .expect(201);
+
+      expect(created.body.data.eventId).toBeNull();
+      expect(created.body.data.author.type).toBe('buyer');
+
+      const recent = await request(app).get('/api/public/questions').set('Authorization', auth).expect(200);
+      expect(recent.body.data.questions).toHaveLength(1);
+      expect(recent.body.data.questions[0].id).toBe(created.body.data.id);
+      expect(recent.body.data.questions[0].event).toBeNull();
+    });
+
+    it("doesn't appear under any specific event's Q&A list", async () => {
+      const { eventId } = await seedPublishedEvent();
+      await seedBuyer();
+      const auth = `Bearer ${signBuyerToken(PHONE)}`;
+      await request(app).post('/api/community/questions').set('Authorization', auth).send({ body: 'General post' }).expect(201);
+
+      const eventList = await request(app).get(`/api/community/${eventId}/questions`).expect(200);
+      expect(eventList.body.data).toEqual([]);
+    });
+
+    it('supports reply and like on a general post, same as an event-scoped one', async () => {
+      await seedBuyer();
+      const auth = `Bearer ${signBuyerToken(PHONE)}`;
+      const created = await request(app)
+        .post('/api/community/questions')
+        .set('Authorization', auth)
+        .send({ body: 'General post' })
+        .expect(201);
+      const questionId = created.body.data.id;
+
+      const replyRes = await request(app)
+        .post(`/api/community/questions/${questionId}/replies`)
+        .set('Authorization', auth)
+        .send({ body: 'Replying to everyone' })
+        .expect(201);
+      expect(replyRes.body.data.eventId).toBeNull();
+
+      const liked = await request(app)
+        .post(`/api/community/questions/${questionId}/like`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(liked.body.data).toEqual({ active: true, likeCount: 1 });
+
+      const single = await request(app).get(`/api/community/questions/${questionId}`).set('Authorization', auth).expect(200);
+      expect(single.body.data.event).toBeNull();
+      expect(single.body.data.replies).toHaveLength(1);
+      expect(single.body.data.viewerHasLiked).toBe(true);
+    });
+
+    it('GET /api/public/questions/general returns only general posts, never an event-scoped one', async () => {
+      const { eventId } = await seedPublishedEvent();
+      await seedBuyer();
+      const auth = `Bearer ${signBuyerToken(PHONE)}`;
+
+      await request(app).post(`/api/community/${eventId}/questions`).set('Authorization', auth).send({ body: 'Event-scoped post' }).expect(201);
+      const general = await request(app).post('/api/community/questions').set('Authorization', auth).send({ body: 'General post' }).expect(201);
+
+      const res = await request(app).get('/api/public/questions/general').set('Authorization', auth).expect(200);
+      expect(res.body.data.questions).toHaveLength(1);
+      expect(res.body.data.questions[0].id).toBe(general.body.data.id);
+      expect(res.body.data.questions[0].event).toBeNull();
+    });
+  });
+
   describe('social suspension enforcement', () => {
     const OK_PHONE = '+26878400010';
     const SUSPENDED_PHONE = '+26878400011';

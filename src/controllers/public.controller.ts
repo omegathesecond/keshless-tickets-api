@@ -33,10 +33,13 @@ import { normalizeHashtag } from '@utils/hashtags.util';
 import { UpdateController } from '@controllers/update.controller';
 import { getViewerReactions } from '@services/update.service';
 import { getActivityFeed } from '@services/activityFeed';
+import { blendedRecentSales, RECENT_SALES_WINDOW_MS as RECENT_WINDOW_MS } from '@utils/recentSales.util';
 
-// "Recent activity" window for the public FOMO surfaces (ticker + trending
-// badges): only sales in the last 48h count as momentum.
-const RECENT_WINDOW_MS = 48 * 60 * 60 * 1000;
+// Re-exported so existing importers (e.g. the recentSales.test.ts suite) of
+// `blendedRecentSales` from this controller keep working — the shared logic
+// itself now lives in recentSales.util (also used by eventCards.service, to
+// avoid a controller<->service circular import).
+export { blendedRecentSales };
 
 // Lookback window for the trending-hashtags rail (TopicsPage): only updates
 // posted in the last 14 days count toward a hashtag's volume, so the rail
@@ -113,34 +116,6 @@ function generateFakeActivity(
       soldAt: new Date(now - Math.floor(Math.random() * EIGHT_HOURS_MS)),
     };
   });
-}
-
-// Deterministic string hash (Java String.hashCode-style) used to derive a
-// per-event synthetic floor WITHOUT Math.random — a per-render/per-request
-// random floor was the original sin (item #19): it re-rolled on every fetch,
-// so the same event could visibly jump between numbers on a refresh. Hashing
-// the eventId instead means the same event always resolves to the same
-// synthetic number until it earns enough real sales to exceed it.
-function seedHash(seed: string): number {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = (hash * 31 + seed.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash);
-}
-
-// Blend of real + synthetic "recent sales" momentum for the public event
-// card, matching the user-approved activity-ticker override (2026-07-09):
-// buyers should never see an active event with zero buzz. Real sales are
-// never understated — the result is always >= realCount — and an event
-// with genuinely zero recent sales floors to a believable, per-event-stable
-// number (3-19) instead of a bare 0.
-const SYNTHETIC_RECENT_SALES_MIN = 3;
-const SYNTHETIC_RECENT_SALES_MAX = 19;
-export function blendedRecentSales(realCount: number, seed: string): number {
-  const range = SYNTHETIC_RECENT_SALES_MAX - SYNTHETIC_RECENT_SALES_MIN + 1;
-  const syntheticFloor = SYNTHETIC_RECENT_SALES_MIN + (seedHash(seed) % range);
-  return Math.max(realCount, syntheticFloor);
 }
 
 // Validation schema for the public "Contact Support" form.

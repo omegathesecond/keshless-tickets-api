@@ -106,6 +106,17 @@ router.get('/topics/:tag/posts', optionalTicketsAuth, PublicController.getTopicP
 router.get('/questions', optionalTicketsAuth, EventQuestionController.listRecent);
 
 /**
+ * @route   GET /api/public/questions/general
+ * @desc    "Chat with Everyone" — the most recent GENERAL posts only (no
+ *          event), newest first, always with `event: null`. Distinct from
+ *          /questions above: this never mixes in event-specific discussion,
+ *          which stays inside each event's own chat.
+ * @access  Public (optional tickets token for viewerHasLiked)
+ * @query   limit (default 20)
+ */
+router.get('/questions/general', optionalTicketsAuth, EventQuestionController.listRecentGeneral);
+
+/**
  * @route   GET /api/public/feed
  * @desc    Discover feed — a blended stream of buyer/organizer updates,
  *          upcoming published events, and real purchase activity. If a

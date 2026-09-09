@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { ApiResponseUtil } from '@utils/apiResponse.util';
 import { failWithHttpError } from '@utils/controllerHelpers.util';
 import { resolveActorFromRequest } from '@utils/socialActor.util';
-import { listQuestions, listRecent, getQuestion, createQuestion, createReply, toggleQuestionLike } from '@services/eventQuestion.service';
+import { listQuestions, listRecent, listRecentGeneral, getQuestion, createQuestion, createReply, toggleQuestionLike } from '@services/eventQuestion.service';
 
 /**
  * Event Q&A — questions/replies/likes scoped to an event, for the
@@ -49,6 +49,24 @@ export class EventQuestionController {
   }
 
   /**
+   * GET /api/public/questions/general
+   * The most recent GENERAL posts only (no event) — powers "Chat with
+   * Everyone", which never shows event-specific discussion. Sibling of
+   * listRecent (cross-event, for TopicsPage).
+   */
+  static async listRecentGeneral(req: Request, res: Response): Promise<any> {
+    try {
+      const actor = await resolveActorFromRequest(req).catch(() => null);
+      const requested = parseInt(String(req.query['limit'] ?? '20'), 10);
+      const limit = Math.min(Math.max(Number.isFinite(requested) ? requested : 20, 1), 50);
+      const questions = await listRecentGeneral(actor, limit);
+      return ApiResponseUtil.success(res, { questions });
+    } catch (error: any) {
+      return failWithHttpError(res, error, 'Failed to load recent questions');
+    }
+  }
+
+  /**
    * GET /api/community/questions/:questionId
    * One topic (question) hydrated with its replies + event, for the standalone
    * conversation page. Public + optionalTicketsAuth: anonymous callers can read
@@ -79,6 +97,21 @@ export class EventQuestionController {
       return ApiResponseUtil.created(res, question);
     } catch (error: any) {
       return failWithHttpError(res, error, 'Failed to post question');
+    }
+  }
+
+  /**
+   * POST /api/community/questions — a general post on "Chat with Everyone",
+   * not scoped to any event (see createQuestion's null-eventId branch).
+   */
+  static async createGeneral(req: Request, res: Response): Promise<any> {
+    try {
+      const actor = await resolveActorFromRequest(req);
+      if (!actor) return ApiResponseUtil.unauthorized(res, 'Please sign in first');
+      const question = await createQuestion(null, actor, req.body?.body);
+      return ApiResponseUtil.created(res, question);
+    } catch (error: any) {
+      return failWithHttpError(res, error, 'Failed to post');
     }
   }
 
