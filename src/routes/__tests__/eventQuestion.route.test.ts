@@ -122,6 +122,9 @@ describe('event Q&A routes', () => {
       .expect(201);
     const questionId = created.body.data.id;
 
+    // Replying requires joining the topic first (see the "topic membership" tests below).
+    await request(app).post(`/api/community/questions/${questionId}/join`).set('Authorization', replierAuth).expect(200);
+
     const replyRes = await request(app)
       .post(`/api/community/questions/${questionId}/replies`)
       .set('Authorization', replierAuth)
@@ -335,6 +338,7 @@ describe('event Q&A routes', () => {
         .send({ body: 'A reply' })
         .expect(403);
 
+      await request(app).post(`/api/community/questions/${questionId}/join`).set('Authorization', `Bearer ${signBuyerToken(OK_PHONE)}`).expect(200);
       await request(app)
         .post(`/api/community/questions/${questionId}/replies`)
         .set('Authorization', `Bearer ${signBuyerToken(OK_PHONE)}`)
@@ -360,6 +364,7 @@ describe('event Q&A routes', () => {
         .set('Authorization', `Bearer ${signBuyerToken(SUSPENDED_PHONE)}`)
         .expect(403);
 
+      await request(app).post(`/api/community/questions/${questionId}/join`).set('Authorization', `Bearer ${signBuyerToken(OK_PHONE)}`).expect(200);
       await request(app)
         .post(`/api/community/questions/${questionId}/like`)
         .set('Authorization', `Bearer ${signBuyerToken(OK_PHONE)}`)
@@ -395,6 +400,114 @@ describe('event Q&A routes', () => {
         .set('Authorization', auth)
         .send({ body: TOO_LONG })
         .expect(400);
+    });
+  });
+
+  describe('topic membership (join/leave)', () => {
+    it('401s an anonymous join/leave attempt', async () => {
+      const { eventId } = await seedPublishedEvent();
+      await seedBuyer();
+      const created = await request(app)
+        .post(`/api/community/${eventId}/questions`)
+        .set('Authorization', `Bearer ${signBuyerToken(PHONE)}`)
+        .send({ body: 'Question body' })
+        .expect(201);
+      const questionId = created.body.data.id;
+
+      await request(app).post(`/api/community/questions/${questionId}/join`).expect(401);
+      await request(app).post(`/api/community/questions/${questionId}/leave`).expect(401);
+    });
+
+    it("auto-joins the topic's creator: the author is already a member and reports viewerIsMember true", async () => {
+      const { eventId } = await seedPublishedEvent();
+      await seedBuyer();
+      const auth = `Bearer ${signBuyerToken(PHONE)}`;
+      const created = await request(app)
+        .post(`/api/community/${eventId}/questions`)
+        .set('Authorization', auth)
+        .send({ body: 'Question body' })
+        .expect(201);
+
+      expect(created.body.data.memberCount).toBe(1);
+      expect(created.body.data.viewerIsMember).toBe(true);
+
+      const fetched = await request(app).get(`/api/community/questions/${created.body.data.id}`).set('Authorization', auth).expect(200);
+      expect(fetched.body.data.memberCount).toBe(1);
+      expect(fetched.body.data.viewerIsMember).toBe(true);
+    });
+
+    it('joining bumps memberCount and unlocks replying; joining twice never duplicates the membership', async () => {
+      const { eventId } = await seedPublishedEvent();
+      await seedBuyer();
+      const joiner = await seedBuyer('+26878400050', 'Joiner');
+      const auth = `Bearer ${signBuyerToken(PHONE)}`;
+      const joinerAuth = `Bearer ${signBuyerToken('+26878400050')}`;
+      const created = await request(app)
+        .post(`/api/community/${eventId}/questions`)
+        .set('Authorization', auth)
+        .send({ body: 'Question body' })
+        .expect(201);
+      const questionId = created.body.data.id;
+
+      const firstJoin = await request(app).post(`/api/community/questions/${questionId}/join`).set('Authorization', joinerAuth).expect(200);
+      expect(firstJoin.body.data).toEqual({ memberCount: 2, viewerIsMember: true, members: expect.any(Array) });
+
+      const secondJoin = await request(app).post(`/api/community/questions/${questionId}/join`).set('Authorization', joinerAuth).expect(200);
+      expect(secondJoin.body.data.memberCount).toBe(2); // repeated tap, no duplicate
+
+      await request(app)
+        .post(`/api/community/questions/${questionId}/replies`)
+        .set('Authorization', joinerAuth)
+        .send({ body: 'Now I can reply' })
+        .expect(201);
+    });
+
+    it('leaving drops memberCount and re-locks replying until joining again', async () => {
+      const { eventId } = await seedPublishedEvent();
+      await seedBuyer();
+      const member = await seedBuyer('+26878400051', 'Member');
+      const auth = `Bearer ${signBuyerToken(PHONE)}`;
+      const memberAuth = `Bearer ${signBuyerToken('+26878400051')}`;
+      const created = await request(app)
+        .post(`/api/community/${eventId}/questions`)
+        .set('Authorization', auth)
+        .send({ body: 'Question body' })
+        .expect(201);
+      const questionId = created.body.data.id;
+      await request(app).post(`/api/community/questions/${questionId}/join`).set('Authorization', memberAuth).expect(200);
+
+      const left = await request(app).post(`/api/community/questions/${questionId}/leave`).set('Authorization', memberAuth).expect(200);
+      expect(left.body.data).toEqual({ memberCount: 1, viewerIsMember: false, members: expect.any(Array) });
+
+      await request(app)
+        .post(`/api/community/questions/${questionId}/replies`)
+        .set('Authorization', memberAuth)
+        .send({ body: 'Blocked until I rejoin' })
+        .expect(403);
+    });
+
+    it('404s joining/leaving a non-existent topic', async () => {
+      await seedBuyer();
+      const auth = `Bearer ${signBuyerToken(PHONE)}`;
+      await request(app).post('/api/community/questions/000000000000000000000000/join').set('Authorization', auth).expect(404);
+      await request(app).post('/api/community/questions/000000000000000000000000/leave').set('Authorization', auth).expect(404);
+    });
+  });
+
+  describe('GET /api/public/questions/general/members', () => {
+    it('returns { memberCount: 0, members: [] } when nobody has joined the main chat yet', async () => {
+      const res = await request(app).get('/api/public/questions/general/members').expect(200);
+      expect(res.body.data).toEqual({ memberCount: 0, members: [] });
+    });
+
+    it('reflects a real member who joined via a general "Chat with Everyone" post', async () => {
+      await seedBuyer();
+      const auth = `Bearer ${signBuyerToken(PHONE)}`;
+      await request(app).post('/api/community/questions').set('Authorization', auth).send({ body: 'Hey everyone!' }).expect(201);
+
+      const res = await request(app).get('/api/public/questions/general/members').expect(200);
+      expect(res.body.data.memberCount).toBe(1);
+      expect(res.body.data.members[0]).toEqual(expect.objectContaining({ type: 'buyer', name: 'Test Buyer' }));
     });
   });
 });

@@ -13,7 +13,11 @@ import {
   createQuestion,
   createReply,
   toggleQuestionLike,
+  joinQuestion,
+  leaveQuestion,
+  getGeneralChatSummary,
 } from '@services/eventQuestion.service';
+import { EventQuestionMember } from '@models/eventQuestionMember.model';
 import { HttpError } from '@utils/httpError.util';
 import type { SocialActor } from '@utils/socialActor.util';
 
@@ -145,10 +149,31 @@ describe('eventQuestion.service', () => {
       const question = await EventQuestion.create({ eventId, authorType: 'buyer', authorId: asker._id, body: 'Q1' });
       const suspended = await Buyer.create({ phone: '+26878400022', password: 'secret1', name: 'Suspended', socialSuspendedAt: new Date() });
       const actor: SocialActor = { type: 'buyer', id: String(suspended._id) };
+      // Suspension is checked before membership, so a suspended non-member
+      // actor must still see the suspension error, not "join this topic".
       await expect(createReply(question.id, actor, 'A reply')).rejects.toMatchObject({
         statusCode: 403,
         message: 'Your community access is suspended',
       });
+    });
+
+    it('throws 403 asking a non-member to join before replying', async () => {
+      const { eventId } = await seedPublishedEvent();
+      const asker = await seedBuyer({ phone: '+26878400024', name: 'Asker' });
+      const stranger = await seedBuyer({ phone: '+26878400025', name: 'Stranger' });
+      const question = await EventQuestion.create({ eventId, authorType: 'buyer', authorId: asker._id, body: 'Q1' });
+      await expect(createReply(question.id, { type: 'buyer', id: String(stranger._id) }, 'A reply')).rejects.toMatchObject({
+        statusCode: 403,
+        message: 'Join this topic to participate in the conversation.',
+      });
+    });
+
+    it("lets the topic's own author reply without explicitly joining", async () => {
+      const { eventId } = await seedPublishedEvent();
+      const asker = await seedBuyer({ phone: '+26878400026', name: 'Asker' });
+      const question = await EventQuestion.create({ eventId, authorType: 'buyer', authorId: asker._id, body: 'Q1' });
+      const reply = await createReply(question.id, { type: 'buyer', id: String(asker._id) }, 'Following up on my own question');
+      expect(reply.body).toBe('Following up on my own question');
     });
 
     it('creates a reply, increments replyCount, and returns the author DTO', async () => {
@@ -158,8 +183,10 @@ describe('eventQuestion.service', () => {
       const question = await EventQuestion.create({
         eventId, authorType: 'buyer', authorId: asker._id, body: 'When do gates open?',
       });
+      const replierActor: SocialActor = { type: 'buyer', id: String(replier._id) };
+      await joinQuestion(question.id, replierActor);
 
-      const reply = await createReply(question.id, { type: 'buyer', id: String(replier._id) }, 'At 6pm!');
+      const reply = await createReply(question.id, replierActor, 'At 6pm!');
 
       expect(reply.body).toBe('At 6pm!');
       expect(reply.questionId).toBe(question.id);
@@ -179,12 +206,24 @@ describe('eventQuestion.service', () => {
       const question = await EventQuestion.create({ eventId, authorType: 'buyer', authorId: buyer._id, body: 'Q1' });
       const liker = await seedBuyer({ phone: '+26878400005', name: 'Liker' });
       const actor: SocialActor = { type: 'buyer', id: String(liker._id) };
+      await joinQuestion(question.id, actor);
 
       const on = await toggleQuestionLike(question.id, actor);
       expect(on).toEqual({ active: true, likeCount: 1 });
 
       const off = await toggleQuestionLike(question.id, actor);
       expect(off).toEqual({ active: false, likeCount: 0 });
+    });
+
+    it('throws 403 asking a non-member to join before reacting', async () => {
+      const { eventId } = await seedPublishedEvent();
+      const buyer = await seedBuyer();
+      const question = await EventQuestion.create({ eventId, authorType: 'buyer', authorId: buyer._id, body: 'Q1' });
+      const stranger = await seedBuyer({ phone: '+26878400027', name: 'Stranger' });
+      await expect(toggleQuestionLike(question.id, { type: 'buyer', id: String(stranger._id) })).rejects.toMatchObject({
+        statusCode: 403,
+        message: 'Join this topic to participate in the conversation.',
+      });
     });
 
     it('throws 403 for a suspended buyer actor', async () => {
@@ -241,6 +280,7 @@ describe('eventQuestion.service', () => {
 
       const liked = await EventQuestion.create({ eventId, authorType: 'buyer', authorId: buyer._id, body: 'Liked question' });
       const notLiked = await EventQuestion.create({ eventId, authorType: 'buyer', authorId: buyer._id, body: 'Not liked' });
+      await joinQuestion(liked.id, liker);
       await toggleQuestionLike(liked.id, liker);
 
       const asLiker = await listQuestions(eventId, liker);
@@ -293,8 +333,8 @@ describe('eventQuestion.service', () => {
       const list = await listRecent(null);
 
       expect(list.map((q: any) => q.id)).toEqual([q2.id, q1.id]);
-      expect(list[0].event).toEqual({ id: eventB.eventId, name: 'Winter Fest' });
-      expect(list[1].event).toEqual({ id: eventA.eventId, name: 'Summer Jam' });
+      expect(list[0].event).toEqual({ id: eventB.eventId, name: 'Winter Fest', image: null });
+      expect(list[1].event).toEqual({ id: eventA.eventId, name: 'Summer Jam', image: null });
     });
 
     it('hydrates author, replies (author DTO\'d), and viewerHasLiked exactly like listQuestions', async () => {
@@ -307,7 +347,10 @@ describe('eventQuestion.service', () => {
       const question = await EventQuestion.create({
         eventId, authorType: 'buyer', authorId: asker._id, body: 'When do gates open?',
       });
-      await createReply(question.id, { type: 'buyer', id: String(replier._id) }, 'At 6pm!');
+      const replierActor: SocialActor = { type: 'buyer', id: String(replier._id) };
+      await joinQuestion(question.id, replierActor);
+      await createReply(question.id, replierActor, 'At 6pm!');
+      await joinQuestion(question.id, liker);
       await toggleQuestionLike(question.id, liker);
 
       const [entry] = await listRecent(liker);
@@ -361,7 +404,9 @@ describe('eventQuestion.service', () => {
       const asker = await seedBuyer({ phone: '+26878000100', name: 'Asker' });
       const replier = await seedBuyer({ phone: '+26878000101', name: 'Replier' });
       const q = await createQuestion(eventId, { type: 'buyer', id: String(asker._id) }, 'What should I wear?');
-      await createReply(q.id, { type: 'buyer', id: String(replier._id) }, 'Neon colours obviously');
+      const replierActor: SocialActor = { type: 'buyer', id: String(replier._id) };
+      await joinQuestion(q.id, replierActor);
+      await createReply(q.id, replierActor, 'Neon colours obviously');
 
       const detail = await getQuestion(q.id, null);
       expect(detail).toMatchObject({
@@ -375,6 +420,98 @@ describe('eventQuestion.service', () => {
 
     it('returns null for a non-existent id (so the controller 404s, not 500s)', async () => {
       expect(await getQuestion(String(new mongoose.Types.ObjectId()), null)).toBeNull();
+    });
+  });
+
+  describe('membership (join/leave/joinQuestion side effects)', () => {
+    it('auto-joins the creator, so a fresh topic starts with memberCount 1 and viewerIsMember true', async () => {
+      const { eventId } = await seedPublishedEvent();
+      const buyer = await seedBuyer({ name: 'Nomsa' });
+      const actor: SocialActor = { type: 'buyer', id: String(buyer._id) };
+
+      const q = await createQuestion(eventId, actor, 'Anyone else going?');
+
+      expect(q.memberCount).toBe(1);
+      expect(q.viewerIsMember).toBe(true);
+      expect(q.members).toEqual([expect.objectContaining({ type: 'buyer', id: String(buyer._id), name: 'Nomsa' })]);
+
+      const fetched = await getQuestion(q.id, actor);
+      expect(fetched.memberCount).toBe(1);
+      expect(fetched.viewerIsMember).toBe(true);
+    });
+
+    it('joinQuestion adds a member, bumps memberCount, and is idempotent on a repeated call', async () => {
+      const { eventId } = await seedPublishedEvent();
+      const author = await seedBuyer({ phone: '+26878400030', name: 'Author' });
+      const joiner = await seedBuyer({ phone: '+26878400031', name: 'Joiner' });
+      const question = await EventQuestion.create({ eventId, authorType: 'buyer', authorId: author._id, body: 'Q1' });
+      const actor: SocialActor = { type: 'buyer', id: String(joiner._id) };
+
+      const first = await joinQuestion(question.id, actor);
+      expect(first).toEqual({ memberCount: 1, viewerIsMember: true, members: [expect.objectContaining({ id: String(joiner._id) })] });
+
+      const second = await joinQuestion(question.id, actor);
+      expect(second.memberCount).toBe(1); // tapping Join again never creates a duplicate row
+      expect(await EventQuestionMember.countDocuments({ questionId: question.id })).toBe(1);
+    });
+
+    it('leaveQuestion removes membership and is idempotent; a non-member leaving is a no-op', async () => {
+      const { eventId } = await seedPublishedEvent();
+      const author = await seedBuyer({ phone: '+26878400032', name: 'Author' });
+      const member = await seedBuyer({ phone: '+26878400033', name: 'Member' });
+      const question = await EventQuestion.create({ eventId, authorType: 'buyer', authorId: author._id, body: 'Q1' });
+      const actor: SocialActor = { type: 'buyer', id: String(member._id) };
+      await joinQuestion(question.id, actor);
+
+      const left = await leaveQuestion(question.id, actor);
+      expect(left).toEqual({ memberCount: 0, viewerIsMember: false, members: [] });
+
+      // Leaving again (already gone) must not throw.
+      await expect(leaveQuestion(question.id, actor)).resolves.toEqual({ memberCount: 0, viewerIsMember: false, members: [] });
+    });
+
+    it('joinQuestion throws 404 for a non-existent topic', async () => {
+      const buyer = await seedBuyer();
+      const actor: SocialActor = { type: 'buyer', id: String(buyer._id) };
+      await expect(joinQuestion(String(new mongoose.Types.ObjectId()), actor)).rejects.toMatchObject({ statusCode: 404 });
+    });
+
+    it('caps the members preview at 4 but reports the real total count', async () => {
+      const { eventId } = await seedPublishedEvent();
+      const author = await seedBuyer({ phone: '+26878400040', name: 'Author' });
+      const question = await EventQuestion.create({ eventId, authorType: 'buyer', authorId: author._id, body: 'Q1' });
+      for (let i = 0; i < 5; i++) {
+        const joiner = await seedBuyer({ phone: `+2687840005${i}`, name: `Joiner${i}` });
+        await joinQuestion(question.id, { type: 'buyer', id: String(joiner._id) });
+      }
+
+      const detail = await getQuestion(question.id, null);
+      expect(detail.memberCount).toBe(5);
+      expect(detail.members).toHaveLength(4);
+    });
+  });
+
+  describe('getGeneralChatSummary', () => {
+    it('returns { memberCount: 0, members: [] } when nobody has joined any general topic', async () => {
+      expect(await getGeneralChatSummary()).toEqual({ memberCount: 0, members: [] });
+    });
+
+    it('counts distinct actors across general topics only, never an event-scoped one', async () => {
+      const { eventId } = await seedPublishedEvent();
+      const alice = await seedBuyer({ phone: '+26878400060', name: 'Alice' });
+      const bob = await seedBuyer({ phone: '+26878400061', name: 'Bob' });
+      const aliceActor: SocialActor = { type: 'buyer', id: String(alice._id) };
+      const bobActor: SocialActor = { type: 'buyer', id: String(bob._id) };
+
+      // Alice joins a general topic (auto, as its creator) and an event-scoped one.
+      const general = await createQuestion(null, aliceActor, 'Hey everyone!');
+      await createQuestion(eventId, aliceActor, 'Event-scoped question');
+      // Bob joins the same general topic explicitly.
+      await joinQuestion(general.id, bobActor);
+
+      const summary = await getGeneralChatSummary();
+      expect(summary.memberCount).toBe(2);
+      expect(summary.members.map((m) => m.id).sort()).toEqual([String(alice._id), String(bob._id)].sort());
     });
   });
 });
