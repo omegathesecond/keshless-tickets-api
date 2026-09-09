@@ -1,7 +1,10 @@
 import { Event } from '@models/event.model';
 import { Vendor } from '@models/vendor.model';
+import { TicketSale } from '@models/ticketSale.model';
+import { SalesChannel, PaymentStatus } from '@interfaces/ticket.interface';
 import { toPublicEventCard } from '@/utils/eventCard.util';
 import { getViewerEventReactions } from '@services/eventReaction.service';
+import { blendedRecentSales, RECENT_SALES_WINDOW_MS } from '@utils/recentSales.util';
 import type { SocialActor } from '@/utils/socialActor.util';
 
 /** Load events by id (preserving the given order) and serialize each to the
@@ -30,6 +33,26 @@ export async function buildEventCards(
   const vMap = new Map(vendors.map((v: any) => [String(v._id), { id: String(v._id), businessName: v.businessName, logoUrl: v.logoUrl ?? null }]));
 
   const reactions = actor ? await getViewerEventReactions(ordered.map((e) => String(e._id)), actor) : {};
+
+  // Same real+synthetic "recent sales" blend the public events list uses for
+  // its activity-ticker (see public.controller's blendedRecentSales) — these
+  // cards used to omit it entirely, which made a recommended/saved event's
+  // card show a bare 0 next to the people icon instead of the same kind of
+  // number a "Hot This Week" card (sourced from that same public list) shows.
+  const since = new Date(Date.now() - RECENT_SALES_WINDOW_MS);
+  const recentAgg = await TicketSale.aggregate([
+    {
+      $match: {
+        eventId: { $in: ordered.map((e) => e._id) },
+        paymentStatus: PaymentStatus.COMPLETED,
+        channel: { $ne: SalesChannel.WRISTBAND },
+        soldAt: { $gte: since },
+      },
+    },
+    { $group: { _id: '$eventId', recent: { $sum: '$quantity' } } },
+  ]);
+  const recentMap = new Map<string, number>(recentAgg.map((a: any) => [String(a._id), a.recent]));
+
   return ordered.map((e) => toPublicEventCard(e, {
     ...(opts.goingEventIds ? { viewerIsGoing: opts.goingEventIds.has(String(e._id)) } : {}),
     organizer: e.vendorId ? (vMap.get(String(e.vendorId)) ?? null) : null,
@@ -39,5 +62,6 @@ export async function buildEventCards(
     likeCount: (e as any).likeCount ?? 0,
     viewerHasLiked: reactions[String(e._id)]?.liked ?? false,
     viewerHasSaved: reactions[String(e._id)]?.saved ?? false,
+    recentSales: blendedRecentSales(recentMap.get(String(e._id)) || 0, String(e._id)),
   }));
 }

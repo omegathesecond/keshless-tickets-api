@@ -57,7 +57,7 @@ export async function listMine(actor: SocialActor, limit = DEFAULT_LIMIT): Promi
     EventQuestionRead.find({ actorType: actor.type, actorId: actor.id, questionId: { $in: questionIds } })
       .select('questionId lastViewedAt')
       .lean(),
-    Event.find({ _id: { $in: [...new Set(questions.map((q) => String(q.eventId)))] } })
+    Event.find({ _id: { $in: [...new Set(questions.map((q) => q.eventId).filter(Boolean).map((id) => String(id)))] } })
       .select('name posterUrl thumbnailUrl')
       .lean(),
   ]);
@@ -86,11 +86,11 @@ export async function listMine(actor: SocialActor, limit = DEFAULT_LIMIT): Promi
     // never opened (no cursor) counts every other author's reply; my own
     // replies never count, so answering a topic can't make it look unread.
     const unreadCount = qReplies.filter((r) => !isActorReply(r, actor) && (!seenAt || r.createdAt > seenAt)).length;
-    const ev = eventMap.get(String(q.eventId));
+    const ev = q.eventId ? eventMap.get(String(q.eventId)) : null;
 
     return {
       id,
-      eventId: String(q.eventId),
+      eventId: q.eventId ? String(q.eventId) : null,
       body: q.body,
       likeCount: q.likeCount,
       replyCount: q.replyCount,
@@ -104,7 +104,8 @@ export async function listMine(actor: SocialActor, limit = DEFAULT_LIMIT): Promi
         author: authorDto(r.authorType, r.authorId, authorMaps),
       })),
       unreadCount,
-      event: { id: String(q.eventId), name: ev?.name ?? null, image: ev?.thumbnailUrl ?? ev?.posterUrl ?? null },
+      // Absent for a general "Chat with Everyone" post — it isn't about an event.
+      event: q.eventId ? { id: String(q.eventId), name: ev?.name ?? null, image: ev?.thumbnailUrl ?? ev?.posterUrl ?? null } : null,
     };
   });
 }
