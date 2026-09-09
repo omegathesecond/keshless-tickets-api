@@ -5,6 +5,7 @@ import { EventQuestionReaction } from '@models/eventQuestionReaction.model';
 import { EventQuestionRead } from '@models/eventQuestionRead.model';
 import { HttpError } from '@utils/httpError.util';
 import { loadAuthorMaps, authorDto } from '@services/socialAuthor.service';
+import { loadMembershipInfo, type QuestionMemberInfo } from '@services/eventQuestion.service';
 import type { SocialActor } from '@utils/socialActor.util';
 
 /**
@@ -49,7 +50,7 @@ export async function listMine(actor: SocialActor, limit = DEFAULT_LIMIT): Promi
 
   const questionIds = questions.map((q) => String(q._id));
 
-  const [replies, likedRows, reads, events] = await Promise.all([
+  const [replies, likedRows, reads, events, memberInfo] = await Promise.all([
     EventQuestionReply.find({ questionId: { $in: questionIds } }).sort({ createdAt: 1 }).lean(),
     EventQuestionReaction.find({ questionId: { $in: questionIds }, actorType: actor.type, buyerId: actor.id, type: 'like' })
       .select('questionId')
@@ -60,6 +61,7 @@ export async function listMine(actor: SocialActor, limit = DEFAULT_LIMIT): Promi
     Event.find({ _id: { $in: [...new Set(questions.map((q) => q.eventId).filter(Boolean).map((id) => String(id)))] } })
       .select('name posterUrl thumbnailUrl')
       .lean(),
+    loadMembershipInfo(questionIds, actor),
   ]);
 
   const authorMaps = await loadAuthorMaps([
@@ -106,6 +108,7 @@ export async function listMine(actor: SocialActor, limit = DEFAULT_LIMIT): Promi
       unreadCount,
       // Absent for a general "Chat with Everyone" post — it isn't about an event.
       event: q.eventId ? { id: String(q.eventId), name: ev?.name ?? null, image: ev?.thumbnailUrl ?? ev?.posterUrl ?? null } : null,
+      ...(memberInfo.get(id) ?? ({ memberCount: 0, members: [], viewerIsMember: false } as QuestionMemberInfo)),
     };
   });
 }

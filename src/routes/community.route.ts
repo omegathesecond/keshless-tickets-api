@@ -58,6 +58,12 @@ router.post('/questions/:questionId/read', optionalTicketsAuth, TopicsMineContro
 
 router.post('/questions/:questionId/replies', optionalTicketsAuth, requireProfilePhoto, EventQuestionController.reply);
 router.post('/questions/:questionId/like', optionalTicketsAuth, requireProfilePhoto, EventQuestionController.like);
+// Join/leave a topic — required before replying/reacting (see
+// eventQuestion.service#requireMembership). Join carries the same photo
+// requirement as posting/replying, since it creates a social footprint
+// (the actor's avatar joins the topic's member list); leave does not.
+router.post('/questions/:questionId/join', optionalTicketsAuth, requireProfilePhoto, EventQuestionController.join);
+router.post('/questions/:questionId/leave', optionalTicketsAuth, EventQuestionController.leave);
 
 router.post('/:eventId/join', authenticateCommunityViewer, requireProfilePhoto, CommunityController.join);
 // Who's-going social proof is public: optionalCommunityViewer lets signed-out

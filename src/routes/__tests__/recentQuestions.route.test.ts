@@ -54,12 +54,12 @@ describe('GET /api/public/questions', () => {
 
     expect(questions.map((q: any) => q.id)).toEqual([q2.body.data.id, q1.body.data.id]);
 
-    expect(questions[0].event).toEqual({ id: eventB.eventId, name: 'Winter Fest' });
+    expect(questions[0].event).toEqual({ id: eventB.eventId, name: 'Winter Fest', image: null });
     expect(questions[0].author).toEqual(expect.objectContaining({ type: 'buyer', name: 'Test Buyer' }));
     expect(questions[0].viewerHasLiked).toBe(false);
     expect(questions[0].replies).toEqual([]);
 
-    expect(questions[1].event).toEqual({ id: eventA.eventId, name: 'Summer Jam' });
+    expect(questions[1].event).toEqual({ id: eventA.eventId, name: 'Summer Jam', image: null });
     expect(questions[1].replies).toHaveLength(1);
     expect(questions[1].replies[0].body).toBe('A reply on the first question');
 

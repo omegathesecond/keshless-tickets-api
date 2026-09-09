@@ -117,6 +117,16 @@ router.get('/questions', optionalTicketsAuth, EventQuestionController.listRecent
 router.get('/questions/general', optionalTicketsAuth, EventQuestionController.listRecentGeneral);
 
 /**
+ * @route   GET /api/public/questions/general/members
+ * @desc    "Chat with Everyone" member preview for the TopicsPage entry card —
+ *          real avatars (up to 4, most-recently-joined first) + total distinct
+ *          member count across every general topic. Returns
+ *          { memberCount: 0, members: [] } when nobody's joined yet.
+ * @access  Public
+ */
+router.get('/questions/general/members', EventQuestionController.generalMembers);
+
+/**
  * @route   GET /api/public/feed
  * @desc    Discover feed — a blended stream of buyer/organizer updates,
  *          upcoming published events, and real purchase activity. If a

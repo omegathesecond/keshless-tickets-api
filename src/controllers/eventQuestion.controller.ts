@@ -2,7 +2,18 @@ import { Request, Response } from 'express';
 import { ApiResponseUtil } from '@utils/apiResponse.util';
 import { failWithHttpError } from '@utils/controllerHelpers.util';
 import { resolveActorFromRequest } from '@utils/socialActor.util';
-import { listQuestions, listRecent, listRecentGeneral, getQuestion, createQuestion, createReply, toggleQuestionLike } from '@services/eventQuestion.service';
+import {
+  listQuestions,
+  listRecent,
+  listRecentGeneral,
+  getQuestion,
+  createQuestion,
+  createReply,
+  toggleQuestionLike,
+  joinQuestion,
+  leaveQuestion,
+  getGeneralChatSummary,
+} from '@services/eventQuestion.service';
 
 /**
  * Event Q&A — questions/replies/likes scoped to an event, for the
@@ -137,6 +148,48 @@ export class EventQuestionController {
       return ApiResponseUtil.success(res, await toggleQuestionLike(questionId, actor));
     } catch (error: any) {
       return failWithHttpError(res, error, 'Failed to like question');
+    }
+  }
+
+  /**
+   * POST /api/community/questions/:questionId/join
+   * Join a topic — required before replying/reacting. Idempotent: repeated
+   * taps never create duplicate memberships (see joinQuestion).
+   */
+  static async join(req: Request, res: Response): Promise<any> {
+    try {
+      const actor = await resolveActorFromRequest(req);
+      if (!actor) return ApiResponseUtil.unauthorized(res, 'Please sign in first');
+      const questionId = req.params['questionId'] as string;
+      return ApiResponseUtil.success(res, await joinQuestion(questionId, actor));
+    } catch (error: any) {
+      return failWithHttpError(res, error, 'Failed to join topic');
+    }
+  }
+
+  /** POST /api/community/questions/:questionId/leave */
+  static async leave(req: Request, res: Response): Promise<any> {
+    try {
+      const actor = await resolveActorFromRequest(req);
+      if (!actor) return ApiResponseUtil.unauthorized(res, 'Please sign in first');
+      const questionId = req.params['questionId'] as string;
+      return ApiResponseUtil.success(res, await leaveQuestion(questionId, actor));
+    } catch (error: any) {
+      return failWithHttpError(res, error, 'Failed to leave topic');
+    }
+  }
+
+  /**
+   * GET /api/public/questions/general/members
+   * "Chat with Everyone" member preview (avatars + total count) for the
+   * TopicsPage entry card. Public — the card shows this to signed-out
+   * visitors too.
+   */
+  static async generalMembers(_req: Request, res: Response): Promise<any> {
+    try {
+      return ApiResponseUtil.success(res, await getGeneralChatSummary());
+    } catch (error: any) {
+      return failWithHttpError(res, error, 'Failed to load community members');
     }
   }
 }
