@@ -1,5 +1,5 @@
 import { Event } from '@models/event.model';
-import { EventStatus } from '@interfaces/event.interface';
+import { EventStatus, type ITicketType } from '@interfaces/event.interface';
 import { PaymentMethod, TicketStatus, SalesChannel } from '@interfaces/ticket.interface';
 import { assertCarrotTicketing } from '@utils/ticketingGuard.util';
 import { computeAvailable } from '@services/event.service';
@@ -62,7 +62,7 @@ function assertMethodCompatible(lines: ResolvedLine[], method: PaymentMethod): v
  * picking one would misattribute money in the reseller ledger — so it is
  * rejected until slice 5 models per-line attribution.
  */
-function assertSingleAttribution(lines: ResolvedLine[]): void {
+export function assertSingleAttribution(lines: Array<{ ticketType: Pick<ITicketType, 'isAllocation' | 'resellerId'> }>): void {
   const owners = new Set(
     lines.map((l) => (l.ticketType.isAllocation ? String(l.ticketType.resellerId ?? 'MISSING') : 'none'))
   );

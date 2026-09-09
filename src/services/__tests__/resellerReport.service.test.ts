@@ -40,8 +40,7 @@ async function cashSale(resellerId: string, hubId: string) {
     resellerId,
     hubId,
     eventId,
-    ticketTypeId,
-    quantity: 1,
+    items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
     paymentMethod: 'cash',
     customerPhone: '+26878422613',
   });

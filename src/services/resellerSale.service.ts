@@ -7,6 +7,7 @@ import { PaymentConfigService } from '@services/paymentConfig.service';
 import { TicketService } from '@services/ticket.service';
 import { SmsService } from '@services/sms.service';
 import { PaymentMethod, PaymentStatus } from '@interfaces/ticket.interface';
+import type { CartLine } from '@interfaces/cart.interface';
 
 type ResellerPaymentMethod = 'cash' | 'mtn_momo' | 'keshless_wallet';
 
@@ -15,8 +16,15 @@ interface CreateSaleParams {
   resellerId: string;
   hubId: string;
   eventId: string;
-  ticketTypeId: string;
-  quantity: number;
+  /**
+   * One entry per tier. A single-tier ring-up is a one-element array.
+   *
+   * An allocation block's remaining stock is `tier.quantity - tier.sold` on
+   * the tier itself (AllocationService is a read-only view of exactly that),
+   * so the per-line availability check resolveCart already performs IS the
+   * allocation check — there is no second ledger to reconcile here.
+   */
+  items: CartLine[];
   paymentMethod: ResellerPaymentMethod;
   customerName?: string;
   customerPhone?: string;
@@ -113,8 +121,7 @@ export class ResellerSaleService {
 
       const { saleId, referenceId, expiresAt } = await TicketService.initiateMomoPurchase({
         eventId: params.eventId,
-        // Reseller sales are still one tier per transaction (slice 5).
-        items: [{ ticketTypeId: params.ticketTypeId, quantity: params.quantity }],
+        items: params.items,
         customerName: params.customerName,
         customerPhone: params.customerPhone ?? momoPhone,
         momoPhone,
@@ -129,12 +136,10 @@ export class ResellerSaleService {
       return { saleId, status: 'pending', referenceId, expiresAt };
     }
 
-    // Reseller sales are still one tier per transaction (their multi-line
-    // carts land in slice 5), so this is a one-element `lines` array.
     const { sale, tickets, paymentMessage } = await TicketService.sellTickets({
       eventId: params.eventId,
       vendorId: event.vendorId!.toString(),
-      lines: [{ ticketTypeId: params.ticketTypeId, quantity: params.quantity }],
+      lines: params.items,
       paymentMethod: METHOD_ENUM[params.paymentMethod],
       customerName: params.customerName,
       customerPhone: params.customerPhone,

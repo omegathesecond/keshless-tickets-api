@@ -46,7 +46,7 @@ it('cash sale: completed, snapshot reseller-held', async () => {
 
   const res = await ResellerSaleService.createSale({
     operatorId: '64b000000000000000000001', resellerId: r._id.toString(), hubId: '64b000000000000000000002',
-    eventId, ticketTypeId, quantity: 1, paymentMethod: 'cash', customerPhone: '+26878422613',
+    eventId, items: [{ ticketTypeId: ticketTypeId, quantity: 1 }], paymentMethod: 'cash', customerPhone: '+26878422613',
   });
   expect(res.status).toBe('completed');
 
@@ -62,17 +62,17 @@ it('rejects a disabled payment method', async () => {
   const r = await Reseller.create({ businessName: 'X', commissionPercent: null });
   const { eventId, ticketTypeId } = await seedPublishedEvent({ price: 50, capacity: 2 });
   await expect(ResellerSaleService.createSale({
-    operatorId: new mongoose.Types.ObjectId().toString(), resellerId: r._id.toString(), hubId: new mongoose.Types.ObjectId().toString(), eventId, ticketTypeId,
-    quantity: 1, paymentMethod: 'keshless_wallet',
+    operatorId: new mongoose.Types.ObjectId().toString(), resellerId: r._id.toString(), hubId: new mongoose.Types.ObjectId().toString(), eventId, items: [{ ticketTypeId: ticketTypeId, quantity: 1 }], paymentMethod: 'keshless_wallet',
   })).rejects.toThrow(/not available/i);
 });
 
 it('oversell beyond capacity is rejected', async () => {
   const r = await Reseller.create({ businessName: 'Y', commissionPercent: null });
   const { eventId, ticketTypeId } = await seedPublishedEvent({ price: 10, capacity: 1 });
-  const base = { operatorId: new mongoose.Types.ObjectId().toString(), resellerId: r._id.toString(), hubId: new mongoose.Types.ObjectId().toString(), eventId, ticketTypeId, paymentMethod: 'cash' as const };
-  await ResellerSaleService.createSale({ ...base, quantity: 1 });
-  await expect(ResellerSaleService.createSale({ ...base, quantity: 1 })).rejects.toThrow();
+  const base = { operatorId: new mongoose.Types.ObjectId().toString(), resellerId: r._id.toString(), hubId: new mongoose.Types.ObjectId().toString(), eventId, paymentMethod: 'cash' as const };
+  const oneTicket = [{ ticketTypeId, quantity: 1 }];
+  await ResellerSaleService.createSale({ ...base, items: oneTicket });
+  await expect(ResellerSaleService.createSale({ ...base, items: oneTicket })).rejects.toThrow();
 });
 
 it('mtn_momo sale: returns pending + referenceId; PENDING sale is reseller-attributed with carrot custody', async () => {
@@ -87,7 +87,7 @@ it('mtn_momo sale: returns pending + referenceId; PENDING sale is reseller-attri
     operatorId: new mongoose.Types.ObjectId().toString(),
     resellerId: r._id.toString(),
     hubId: new mongoose.Types.ObjectId().toString(),
-    eventId, ticketTypeId, quantity: 1, paymentMethod: 'mtn_momo',
+    eventId, items: [{ ticketTypeId: ticketTypeId, quantity: 1 }], paymentMethod: 'mtn_momo',
     customerPhone: '+26878422613',
   });
 
@@ -117,7 +117,7 @@ it('mtn_momo sale: throws when no buyer phone supplied (no silent fallback)', as
     operatorId: new mongoose.Types.ObjectId().toString(),
     resellerId: r._id.toString(),
     hubId: new mongoose.Types.ObjectId().toString(),
-    eventId, ticketTypeId, quantity: 1, paymentMethod: 'mtn_momo',
+    eventId, items: [{ ticketTypeId: ticketTypeId, quantity: 1 }], paymentMethod: 'mtn_momo',
   })).rejects.toThrow(/phone/i);
 });
 
@@ -134,7 +134,7 @@ it('finalizeSale: a DIFFERENT reseller cannot finalize (ownership isolation)', a
     operatorId: new mongoose.Types.ObjectId().toString(),
     resellerId: owner._id.toString(),
     hubId: new mongoose.Types.ObjectId().toString(),
-    eventId, ticketTypeId, quantity: 1, paymentMethod: 'mtn_momo',
+    eventId, items: [{ ticketTypeId: ticketTypeId, quantity: 1 }], paymentMethod: 'mtn_momo',
     customerPhone: '+26878422613',
   });
   if (created.status !== 'pending') throw new Error('expected pending');
@@ -161,7 +161,7 @@ it('sendSaleSms: sends a confirmation for an owned cash sale', async () => {
 
   const sale = await ResellerSaleService.createSale({
     operatorId: new mongoose.Types.ObjectId().toString(), resellerId: r._id.toString(),
-    hubId: new mongoose.Types.ObjectId().toString(), eventId, ticketTypeId, quantity: 2,
+    hubId: new mongoose.Types.ObjectId().toString(), eventId, items: [{ ticketTypeId: ticketTypeId, quantity: 2 }],
     paymentMethod: 'cash', customerName: 'Test Buyer', customerPhone: '+26878422613',
   });
 
@@ -185,7 +185,7 @@ it('sendSaleSms: rejects a sale owned by another reseller and does not send', as
 
   const sale = await ResellerSaleService.createSale({
     operatorId: new mongoose.Types.ObjectId().toString(), resellerId: owner._id.toString(),
-    hubId: new mongoose.Types.ObjectId().toString(), eventId, ticketTypeId, quantity: 1,
+    hubId: new mongoose.Types.ObjectId().toString(), eventId, items: [{ ticketTypeId: ticketTypeId, quantity: 1 }],
     paymentMethod: 'cash', customerPhone: '+26878422613',
   });
 

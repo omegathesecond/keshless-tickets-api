@@ -59,7 +59,7 @@ export class ResellerController {
         // duplicate that logic.
         loginCode: Joi.string().pattern(/^[0-9A-Za-z]{6}$/).required(),
         pin: Joi.string().pattern(/^\d{6}$/).required(),
-      }).validate(req.body);
+      }).or('items', 'ticketTypeId').validate(req.body);
 
       if (error) {
         return ApiResponseUtil.error(res, error.details[0]?.message || 'Validation error', 400);
@@ -193,8 +193,17 @@ export class ResellerController {
 
       const { error, value } = Joi.object({
         eventId: Joi.string().required().regex(/^[0-9a-fA-F]{24}$/),
-        ticketTypeId: Joi.string().required().regex(/^[0-9a-fA-F]{24}$/),
-        quantity: Joi.number().integer().min(1).max(20).required(),
+        // A basket, or the legacy single-tier pair the Flutter POS still
+        // sends. The till app ships on its own cycle, so the API cannot
+        // require the new shape until that build is out — see cartItemsFrom.
+        items: Joi.array()
+          .items(Joi.object({
+            ticketTypeId: Joi.string().required().regex(/^[0-9a-fA-F]{24}$/),
+            quantity: Joi.number().integer().min(1).max(20).required(),
+          }))
+          .min(1).max(20).optional(),
+        ticketTypeId: Joi.string().optional().regex(/^[0-9a-fA-F]{24}$/),
+        quantity: Joi.number().integer().min(1).max(20).optional(),
         paymentMethod: Joi.string().valid('cash', 'mtn_momo', 'keshless_wallet').required(),
         customerName: Joi.string().optional().max(100).trim().allow(''),
         customerPhone: Joi.string().optional().trim().allow(''),
@@ -214,12 +223,20 @@ export class ResellerController {
         return ApiResponseUtil.forbidden(res, 'This event is not assigned to you');
       }
 
+      // The spread is why TypeScript cannot see a shape change here, so the
+      // cart is resolved explicitly rather than riding along in `value`.
+      const { items: _items, ticketTypeId: _tt, quantity: _q, ...rest } = value;
+      const items = Array.isArray(value.items) && value.items.length > 0
+        ? value.items
+        : [{ ticketTypeId: value.ticketTypeId, quantity: value.quantity ?? 1 }];
+
       const result = await ResellerSaleService.createSale({
         // Trust ONLY values from the verified JWT — never client-supplied ids
         operatorId: reseller.operatorId,
         resellerId: reseller.resellerId,
         hubId: reseller.hubId ?? '',
-        ...value,
+        ...rest,
+        items,
       });
 
       // MoMo is async: surface the PENDING payload (referenceId/expiresAt) so the

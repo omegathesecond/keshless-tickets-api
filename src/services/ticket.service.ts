@@ -3,7 +3,7 @@ import { TicketSale } from '@models/ticketSale.model';
 import { Event } from '@models/event.model';
 import { ITicket, ITicketSale, TicketStatus, PaymentMethod, PaymentStatus, SalesChannel } from '@interfaces/ticket.interface';
 import { EventStatus, type ITicketType } from '@interfaces/event.interface';
-import { resolveCart } from '@services/cart.service';
+import { resolveCart, assertSingleAttribution } from '@services/cart.service';
 import type { CartLine } from '@interfaces/cart.interface';
 import { EventService } from '@services/event.service';
 import { getProcessor } from '@services/payments';
@@ -470,6 +470,12 @@ export class TicketService {
       // of who rang the sale (same rule as the online buyer paths). Taken from
       // the FIRST line: resolveCart guarantees every line in a cart shares one
       // attribution, rejecting carts that would span two owners.
+      // Guarded HERE, not only in resolveCart: this is the choke point every
+      // path funnels through, and the POS and reseller lanes reach it without
+      // going near resolveCart. Without this a till could ring up two
+      // resellers' allocation blocks in one sale and silently attribute both
+      // to whichever happened to be line 0 — real money on the wrong ledger.
+      assertSingleAttribution(resolvedLines);
       const attributionTier = resolvedLines[0]!.ticketType;
       const saleResellerId = resolveSaleResellerId(attributionTier, params.resellerId ? String(params.resellerId) : undefined);
       const resellerAttribution = {
