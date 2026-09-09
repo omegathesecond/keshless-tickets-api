@@ -59,7 +59,7 @@ export class ResellerController {
         // duplicate that logic.
         loginCode: Joi.string().pattern(/^[0-9A-Za-z]{6}$/).required(),
         pin: Joi.string().pattern(/^\d{6}$/).required(),
-      }).or('items', 'ticketTypeId').validate(req.body);
+      }).validate(req.body);
 
       if (error) {
         return ApiResponseUtil.error(res, error.details[0]?.message || 'Validation error', 400);
@@ -210,7 +210,8 @@ export class ResellerController {
         momoPhone: Joi.string().optional().trim().allow(''),
         keshlessCardNumber: Joi.string().optional().length(8).alphanum().uppercase(),
         keshlessPin: Joi.string().optional().length(4).pattern(/^\d{4}$/),
-      }).validate(req.body);
+        // A sale must name at least one tier, in either shape.
+      }).or('items', 'ticketTypeId').validate(req.body);
 
       if (error) {
         return ApiResponseUtil.error(res, error.details[0]?.message || 'Validation error', 400);
