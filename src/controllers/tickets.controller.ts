@@ -875,21 +875,26 @@ export class TicketsController {
         return;
       }
 
-      // The POS still sells ONE tier per ring-up (its basket lands in slice 4),
-      // so translate its {ticketTypeId, quantity} body into the one-element
-      // `lines` array sellTickets now takes. The spread is why TypeScript
-      // cannot see this shape change on its own — the conversion is explicit
-      // for exactly that reason.
-      const { ticketTypeId, quantity, ...rest } = value as {
-        ticketTypeId: string; quantity: number;
+      // Accepts a basket or the legacy single-tier pair: the dashboard's Sell
+      // Tickets page ships separately from this API, so both shapes have to
+      // work during the changeover. The spread is why TypeScript cannot see a
+      // shape change here, which is why the cart is built explicitly.
+      const { items, ticketTypeId, quantity, ...rest } = value as {
+        items?: Array<{ ticketTypeId: string; quantity: number }>;
+        ticketTypeId?: string;
+        quantity?: number;
       } & Record<string, unknown>;
+
+      const lines = Array.isArray(items) && items.length > 0
+        ? items
+        : [{ ticketTypeId: ticketTypeId as string, quantity: quantity ?? 1 }];
 
       const result = await TicketService.sellTickets({
         ...(rest as Omit<Parameters<typeof TicketService.sellTickets>[0], 'vendorId' | 'soldBy' | 'soldByType' | 'lines'>),
         vendorId: ticketsUser.vendorId as string,
         soldBy: (ticketsUser.userId || ticketsUser.vendorId) as string,
         soldByType: ticketsUser.userType === 'vendor' ? 'vendor' : 'sub-user',
-        lines: [{ ticketTypeId, quantity }],
+        lines,
       });
 
       ApiResponseUtil.created(

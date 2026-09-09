@@ -420,19 +420,25 @@ export const sellTicketSchema = Joi.object({
       'any.required': 'Event ID is required',
       'string.pattern.base': 'Invalid event ID format'
     }),
+  // A basket, or the legacy single-tier pair. Box-office staff ring up
+  // several tiers for one customer, and the dashboard ships separately from
+  // this API, so both shapes are accepted (see the controller's normalisation).
+  items: Joi.array()
+    .items(Joi.object({
+      ticketTypeId: Joi.string().required().trim(),
+      quantity: Joi.number().required().min(1).max(100),
+    }))
+    .min(1)
+    .max(20)
+    .optional(),
   ticketTypeId: Joi.string()
-    .required()
-    .trim()
-    .messages({
-      'string.empty': 'Ticket type ID is required',
-      'any.required': 'Ticket type ID is required'
-    }),
+    .optional()
+    .trim(),
   quantity: Joi.number()
-    .required()
+    .optional()
     .min(1)
     .max(100)
     .messages({
-      'any.required': 'Quantity is required',
       'number.min': 'Quantity must be at least 1',
       'number.max': 'Cannot sell more than 100 tickets at once'
     }),
@@ -482,7 +488,7 @@ export const sellTicketSchema = Joi.object({
       }),
     otherwise: Joi.optional()
   })
-});
+}).or('items', 'ticketTypeId');
 
 export const refundTicketSchema = Joi.object({
   reason: Joi.string()
