@@ -13,7 +13,7 @@ function replyDto(reply: any, maps: AuthorMaps) {
   return {
     id: String(reply._id),
     questionId: String(reply.questionId),
-    eventId: String(reply.eventId),
+    eventId: reply.eventId ? String(reply.eventId) : null,
     body: reply.body,
     createdAt: reply.createdAt,
     author: authorDto(reply.authorType, reply.authorId, maps),
@@ -65,7 +65,7 @@ async function hydrateQuestions(questions: any[], actor: SocialActor | null): Pr
     const id = String(q._id);
     return {
       id,
-      eventId: String(q.eventId),
+      eventId: q.eventId ? String(q.eventId) : null,
       body: q.body,
       likeCount: q.likeCount,
       replyCount: q.replyCount,
@@ -97,6 +97,7 @@ export async function getQuestion(questionId: string, actor: SocialActor | null)
   const question = await EventQuestion.findById(questionId).lean();
   if (!question) return null;
   const [hydrated] = await hydrateQuestions([question], actor);
+  if (!question.eventId) return { ...hydrated, event: null };
   const event = await Event.findById(question.eventId).select('name').lean();
   return { ...hydrated, event: { id: String(question.eventId), name: (event as any)?.name ?? null } };
 }
@@ -115,26 +116,33 @@ export async function listRecent(actor: SocialActor | null, limit = 20): Promise
 
   const hydrated = await hydrateQuestions(questions, actor);
 
-  const eventIds = [...new Set(questions.map((q) => String(q.eventId)))];
+  const eventIds = [...new Set(questions.map((q) => q.eventId).filter(Boolean).map((id) => String(id)))];
   const events = await Event.find({ _id: { $in: eventIds } }).select('name').lean();
   const eventMap = new Map(events.map((e: any) => [String(e._id), e]));
 
   return hydrated.map((q) => ({
     ...q,
-    event: { id: q.eventId, name: eventMap.get(q.eventId)?.name ?? null },
+    // Absent for a general "Chat with Everyone" post (no eventId) — that
+    // feed deliberately doesn't surface which event a post is about, because
+    // it isn't about one. See EveryoneChatPage.
+    event: q.eventId ? { id: q.eventId, name: eventMap.get(q.eventId)?.name ?? null } : null,
   }));
 }
 
-/** Post a new question on an event's Q&A thread. */
-export async function createQuestion(eventId: string, actor: SocialActor, body: string): Promise<any> {
+/**
+ * Post a new question. `eventId` scopes it to that event's Q&A thread; pass
+ * null for a general "Chat with Everyone" post, which isn't about any one
+ * event (see EventQuestionController.createGeneral).
+ */
+export async function createQuestion(eventId: string | null, actor: SocialActor, body: string): Promise<any> {
   await assertActorNotSuspended(actor);
   const trimmed = typeof body === 'string' ? body.trim() : '';
   if (!trimmed) throw new HttpError(400, 'Question body is required');
   if (trimmed.length > MAX_BODY_LENGTH) throw new HttpError(400, 'Question is too long');
-  if (!(await Event.exists({ _id: eventId }))) throw new HttpError(404, 'Event not found');
+  if (eventId && !(await Event.exists({ _id: eventId }))) throw new HttpError(404, 'Event not found');
 
   const question: IEventQuestion = await EventQuestion.create({
-    eventId,
+    ...(eventId ? { eventId } : {}),
     authorType: actor.type,
     authorId: actor.id,
     body: trimmed,
@@ -143,7 +151,7 @@ export async function createQuestion(eventId: string, actor: SocialActor, body: 
   const authorMaps = await loadAuthorMaps([{ authorType: actor.type, authorId: actor.id }]);
   return {
     id: String(question._id),
-    eventId: String(question.eventId),
+    eventId: question.eventId ? String(question.eventId) : null,
     body: question.body,
     likeCount: question.likeCount,
     replyCount: question.replyCount,
@@ -166,7 +174,7 @@ export async function createReply(questionId: string, actor: SocialActor, body: 
 
   const reply = await EventQuestionReply.create({
     questionId,
-    eventId: question.eventId,
+    ...(question.eventId ? { eventId: question.eventId } : {}),
     authorType: actor.type,
     authorId: actor.id,
     body: trimmed,

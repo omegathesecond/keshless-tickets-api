@@ -82,6 +82,21 @@ export class EventQuestionController {
     }
   }
 
+  /**
+   * POST /api/community/questions — a general post on "Chat with Everyone",
+   * not scoped to any event (see createQuestion's null-eventId branch).
+   */
+  static async createGeneral(req: Request, res: Response): Promise<any> {
+    try {
+      const actor = await resolveActorFromRequest(req);
+      if (!actor) return ApiResponseUtil.unauthorized(res, 'Please sign in first');
+      const question = await createQuestion(null, actor, req.body?.body);
+      return ApiResponseUtil.created(res, question);
+    } catch (error: any) {
+      return failWithHttpError(res, error, 'Failed to post');
+    }
+  }
+
   /** POST /api/community/questions/:questionId/replies */
   static async reply(req: Request, res: Response): Promise<any> {
     try {

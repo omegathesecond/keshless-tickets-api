@@ -2,12 +2,15 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
 import type { SocialActorType } from '@utils/socialActor.util';
 
 /**
- * A question posted on an event's Q&A thread (TopicsPage). authorType/authorId
- * follow the same actor vocabulary as Update/EventReaction — a buyer or the
- * organizer brand (Vendor) can both ask.
+ * A question posted on an event's Q&A thread (TopicsPage), OR a general post
+ * on the cross-event "Chat with Everyone" feed when eventId is absent —
+ * Chat with Everyone is a public conversation that isn't scoped to any one
+ * event (see createQuestion / EventQuestionController.createGeneral).
+ * authorType/authorId follow the same actor vocabulary as Update/EventReaction
+ * — a buyer or the organizer brand (Vendor) can both ask.
  */
 export interface IEventQuestion extends Document {
-  eventId: Types.ObjectId;
+  eventId?: Types.ObjectId;
   authorType: SocialActorType;
   authorId: Types.ObjectId;
   body: string;
@@ -19,7 +22,7 @@ export interface IEventQuestion extends Document {
 
 const schema = new Schema<IEventQuestion>(
   {
-    eventId: { type: Schema.Types.ObjectId, ref: 'Event', required: true, index: true },
+    eventId: { type: Schema.Types.ObjectId, ref: 'Event', required: false, index: true },
     authorType: { type: String, enum: ['buyer', 'vendor'], required: true },
     authorId: { type: Schema.Types.ObjectId, required: true },
     body: { type: String, required: true, trim: true, maxlength: 1000 },
