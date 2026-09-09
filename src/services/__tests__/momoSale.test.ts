@@ -35,6 +35,7 @@ jest.mock('@services/payments/mtnMomo.client', () => ({
 }));
 
 import { TicketService } from '@services/ticket.service';
+import { ReservationService } from '@services/reservation.service';
 
 beforeAll(async () => {
   await connectTestDb();
@@ -583,5 +584,89 @@ describe('TicketService.reconcilePendingMomoSales', () => {
     // The hold must be gone too, so the inventory is not stranded.
     const updatedEvent = await Event.findById(eventId);
     expect(updatedEvent!.ticketTypes[0]!.reserved).toBe(0);
+  });
+});
+
+/**
+ * The finalizers claim a sale COMPLETED *before* minting, so the claim can
+ * outlive a failed fulfilment. Because every finalizer early-returns on a
+ * non-PENDING sale, such a sale is COMPLETED with no tickets and can never be
+ * retried — the buyer has paid and the system believes it delivered.
+ *
+ * Observed in prod 2026-09-09 recovering the 2026-09-08 MoMo debit: the claim
+ * succeeded, mintSettledSaleTickets threw on a pre-`lines` sale, and the sale
+ * was left completed with zero tickets.
+ */
+describe('claim rollback when fulfilment fails after the claim', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('releases the claim back to PENDING when minting fails having created NOTHING', async () => {
+    const { eventId, ticketTypeId } = await seedPublishedEvent();
+
+    mockMomoInstance.isConfigured.mockReturnValue(true);
+    mockMomoInstance.requestToPay.mockResolvedValue({ referenceId: 'R_NOLINES' });
+    mockMomoInstance.getStatus.mockResolvedValue({
+      status: 'SUCCESSFUL',
+      raw: { amount: '200', currency: 'SZL' },
+    });
+
+    await TicketService.initiateMomoPurchase({
+      eventId,
+      items: [{ ticketTypeId, quantity: 2 }],
+      customerPhone: '+26876777777',
+      momoPhone: '26876777777',
+    });
+
+    // Reproduce a sale written before TicketSale.lines existed: minting refuses
+    // to guess the composition and throws before creating a single ticket.
+    await TicketSale.collection.updateOne(
+      { momoReferenceId: 'R_NOLINES' },
+      { $unset: { lines: '' } }
+    );
+
+    await expect(TicketService.finalizeMomoSale('R_NOLINES')).rejects.toThrow(
+      /no line composition/i
+    );
+
+    // The claim must be released, or the buyer's paid sale is unrecoverable.
+    const sale = await TicketSale.findOne({ momoReferenceId: 'R_NOLINES' });
+    expect(sale!.paymentStatus).toBe(PaymentStatus.PENDING);
+    expect(sale!.ticketIds.length).toBe(0);
+    expect(await Ticket.countDocuments({ saleId: sale!._id })).toBe(0);
+  });
+
+  it('KEEPS the claim when fulfilment fails AFTER tickets were minted', async () => {
+    const { eventId, ticketTypeId } = await seedPublishedEvent();
+
+    mockMomoInstance.isConfigured.mockReturnValue(true);
+    mockMomoInstance.requestToPay.mockResolvedValue({ referenceId: 'R_PARTIAL' });
+    mockMomoInstance.getStatus.mockResolvedValue({
+      status: 'SUCCESSFUL',
+      raw: { amount: '200', currency: 'SZL' },
+    });
+
+    await TicketService.initiateMomoPurchase({
+      eventId,
+      items: [{ ticketTypeId, quantity: 2 }],
+      customerPhone: '+26876888888',
+      momoPhone: '26876888888',
+    });
+
+    // Fails only AFTER mintSettledSaleTickets has already persisted tickets.
+    jest
+      .spyOn(ReservationService, 'confirm')
+      .mockRejectedValue(new Error('confirm exploded'));
+
+    await expect(TicketService.finalizeMomoSale('R_PARTIAL')).rejects.toThrow(
+      /confirm exploded/
+    );
+
+    // Reverting here would let a retry mint a SECOND set of tickets for one
+    // payment, so the sale must stay claimed and be repaired by hand instead.
+    const sale = await TicketSale.findOne({ momoReferenceId: 'R_PARTIAL' });
+    expect(sale!.paymentStatus).toBe(PaymentStatus.COMPLETED);
+    expect(await Ticket.countDocuments({ saleId: sale!._id })).toBe(2);
   });
 });

@@ -326,6 +326,77 @@ export class TicketService {
     }
   }
 
+  /**
+   * Fulfils an async-rail sale that has just been atomically claimed COMPLETED,
+   * and releases the claim again if that fulfilment fails.
+   *
+   * The claim has to be taken BEFORE the tickets exist — it is the only thing
+   * standing between a concurrent poll, callback and reconcile all minting the
+   * same sale. The cost is that the claim can outlive a failed fulfilment, and
+   * because every finalizer early-returns on a non-PENDING sale, the result is
+   * a sale marked COMPLETED with no tickets that can never be retried: the
+   * buyer has paid and the system believes it delivered. That is exactly how
+   * the 2026-09-08 MoMo debit ended up stranded.
+   *
+   * On failure we therefore ask the only question that decides it — did
+   * anything actually get minted?
+   *
+   * - NOTHING minted → release the claim back to PENDING so the next
+   *   poll/callback/reconcile can legitimately retry once the cause is fixed.
+   * - SOMETHING minted → the claim STAYS. Reverting would let a retry mint a
+   *   SECOND set of tickets against a single payment, which is worse than the
+   *   stall; it is logged loudly for manual repair instead.
+   *
+   * Either way the original error propagates — a caller must never report
+   * success for a sale it did not fulfil.
+   */
+  private static async fulfilClaimedSale(
+    sale: ITicketSale,
+    claimed: ITicketSale
+  ): Promise<ITicket[]> {
+    try {
+      const tickets: ITicket[] = await this.mintSettledSaleTickets(sale);
+
+      claimed.ticketIds = tickets.map(t => t._id as mongoose.Types.ObjectId);
+      await claimed.save();
+
+      await ReservationService.confirm(sale._id.toString()); // reserved -= qty
+      await this.applySoldCountsForSale(sale); // sold += qty, per line
+
+      return tickets;
+    } catch (err) {
+      const minted = await Ticket.countDocuments({ saleId: sale._id });
+      const detail = {
+        saleId: sale._id.toString(),
+        saleRef: sale.saleId,
+        paymentMethod: sale.paymentMethod,
+        error: err instanceof Error ? err.message : String(err),
+      };
+
+      if (minted === 0) {
+        await TicketSale.updateOne(
+          {
+            _id: sale._id,
+            paymentStatus: PaymentStatus.COMPLETED,
+            $or: [{ ticketIds: { $size: 0 } }, { ticketIds: { $exists: false } }],
+          },
+          { $set: { paymentStatus: PaymentStatus.PENDING } }
+        );
+        console.error(
+          '[finalize] ✗ fulfilment failed with NOTHING minted — claim released back to PENDING for retry',
+          detail
+        );
+      } else {
+        console.error(
+          '[finalize] ✗✗ fulfilment failed AFTER minting — sale LEFT COMPLETED, NEEDS MANUAL REPAIR',
+          { ...detail, mintedTickets: minted }
+        );
+      }
+
+      throw err;
+    }
+  }
+
   static async sellTickets(params: SellTicketsParams): Promise<{
     sale: ITicketSale;
     tickets: ITicket[];
@@ -2023,14 +2094,10 @@ export class TicketService {
     // Mint tickets, convert reservation (reserved→sold), SMS
     const event = await Event.findById(sale.eventId);
     // Mints from the sale's own composition snapshot, so every ticket carries
-    // ITS tier's name and the price the buyer actually agreed to.
-    const tickets: ITicket[] = await this.mintSettledSaleTickets(sale);
-
-    claimed.ticketIds = tickets.map(t => t._id as mongoose.Types.ObjectId);
-    await claimed.save();
-
-    await ReservationService.confirm(sale._id.toString()); // reserved -= qty
-    await this.applySoldCountsForSale(sale); // sold += qty, per line
+    // ITS tier's name and the price the buyer actually agreed to. If any of
+    // this fails, fulfilClaimedSale releases the claim we just took so the
+    // sale can be retried rather than stranded COMPLETED with no tickets.
+    const tickets: ITicket[] = await this.fulfilClaimedSale(sale, claimed);
 
     if (event) {
       const summaries = tickets.map(t => ({
@@ -2129,14 +2196,10 @@ export class TicketService {
     // Mint tickets, confirm reservation (reserved→sold), best-effort SMS
     const event = await Event.findById(sale.eventId);
     // Mints from the sale's own composition snapshot, so every ticket carries
-    // ITS tier's name and the price the buyer actually agreed to.
-    const tickets: ITicket[] = await this.mintSettledSaleTickets(sale);
-
-    claimed.ticketIds = tickets.map(t => t._id as mongoose.Types.ObjectId);
-    await claimed.save();
-
-    await ReservationService.confirm(sale._id.toString()); // reserved -= qty
-    await this.applySoldCountsForSale(sale); // sold += qty, per line
+    // ITS tier's name and the price the buyer actually agreed to. If any of
+    // this fails, fulfilClaimedSale releases the claim we just took so the
+    // sale can be retried rather than stranded COMPLETED with no tickets.
+    const tickets: ITicket[] = await this.fulfilClaimedSale(sale, claimed);
 
     if (event) {
       const summaries = tickets.map(t => ({
@@ -2326,14 +2389,10 @@ export class TicketService {
     // Mint tickets, confirm reservation (reserved→sold), best-effort SMS
     const event = await Event.findById(sale.eventId);
     // Mints from the sale's own composition snapshot, so every ticket carries
-    // ITS tier's name and the price the buyer actually agreed to.
-    const tickets: ITicket[] = await this.mintSettledSaleTickets(sale);
-
-    claimed.ticketIds = tickets.map(t => t._id as mongoose.Types.ObjectId);
-    await claimed.save();
-
-    await ReservationService.confirm(sale._id.toString()); // reserved -= qty
-    await this.applySoldCountsForSale(sale); // sold += qty, per line
+    // ITS tier's name and the price the buyer actually agreed to. If any of
+    // this fails, fulfilClaimedSale releases the claim we just took so the
+    // sale can be retried rather than stranded COMPLETED with no tickets.
+    const tickets: ITicket[] = await this.fulfilClaimedSale(sale, claimed);
 
     if (event) {
       const summaries = tickets.map(t => ({
@@ -2660,14 +2719,10 @@ export class TicketService {
     // Mint tickets, confirm reservation (reserved→sold), best-effort SMS/email
     const eventDoc = await Event.findById(sale.eventId);
     // Mints from the sale's own composition snapshot, so every ticket carries
-    // ITS tier's name and the price the buyer actually agreed to.
-    const tickets: ITicket[] = await this.mintSettledSaleTickets(sale);
-
-    claimed.ticketIds = tickets.map(t => t._id as mongoose.Types.ObjectId);
-    await claimed.save();
-
-    await ReservationService.confirm(sale._id.toString()); // reserved -= qty
-    await this.applySoldCountsForSale(sale); // sold += qty, per line
+    // ITS tier's name and the price the buyer actually agreed to. If any of
+    // this fails, fulfilClaimedSale releases the claim we just took so the
+    // sale can be retried rather than stranded COMPLETED with no tickets.
+    const tickets: ITicket[] = await this.fulfilClaimedSale(sale, claimed);
 
     if (eventDoc) {
       const summaries = tickets.map(t => ({
@@ -3010,14 +3065,10 @@ export class TicketService {
     // Mint tickets, confirm reservation (reserved→sold), best-effort SMS/email
     const eventDoc = await Event.findById(sale.eventId);
     // Mints from the sale's own composition snapshot, so every ticket carries
-    // ITS tier's name and the price the buyer actually agreed to.
-    const tickets: ITicket[] = await this.mintSettledSaleTickets(sale);
-
-    claimed.ticketIds = tickets.map(t => t._id as mongoose.Types.ObjectId);
-    await claimed.save();
-
-    await ReservationService.confirm(sale._id.toString()); // reserved -= qty
-    await this.applySoldCountsForSale(sale); // sold += qty, per line
+    // ITS tier's name and the price the buyer actually agreed to. If any of
+    // this fails, fulfilClaimedSale releases the claim we just took so the
+    // sale can be retried rather than stranded COMPLETED with no tickets.
+    const tickets: ITicket[] = await this.fulfilClaimedSale(sale, claimed);
 
     if (eventDoc) {
       const summaries = tickets.map(t => ({
