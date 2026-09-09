@@ -335,3 +335,94 @@ describe('PATCH /api/tickets/menu-orders/:id — fulfilment transitions', () => 
     expect(res.body.data.fulfillmentStatus).toBe(MenuOrderFulfillmentStatus.CANCELLED);
   });
 });
+
+describe('POST /api/tickets/menu-orders/scan and /collect — QR collection scanner', () => {
+  let eventId: string;
+  let buyerId: mongoose.Types.ObjectId;
+
+  beforeEach(async () => {
+    const buyer = await seedBuyer();
+    buyerId = buyer._id as mongoose.Types.ObjectId;
+    eventId = await eventWith(EventStatus.PUBLISHED);
+  });
+
+  const scan = (orderId: string, token = organizerToken()) =>
+    request(app).post('/api/tickets/menu-orders/scan')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ orderId });
+
+  const collect = (orderId: string, token = organizerToken()) =>
+    request(app).post('/api/tickets/menu-orders/collect')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ orderId });
+
+  it('finds a paid order by its human-readable orderId (the QR payload)', async () => {
+    const order = await paidOrder(eventId, buyerId, { fulfillmentStatus: MenuOrderFulfillmentStatus.READY });
+
+    const res = await scan(order.orderId);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.orderId).toBe(order.orderId);
+    expect(res.body.data.fulfillmentStatus).toBe(MenuOrderFulfillmentStatus.READY);
+  });
+
+  it('returns 404 for an unknown code, never leaking whether it is malformed or someone else\'s', async () => {
+    const res = await scan('MENU-DOES-NOT-EXIST');
+    expect(res.status).toBe(404);
+  });
+
+  it('404s a real order that belongs to a different vendor, same as not-found', async () => {
+    const otherEventId = await eventWith(EventStatus.PUBLISHED, '64c000000000000000000b02');
+    const order = await MenuOrder.create({
+      orderId: 'MENU-OTHER-VENDOR',
+      eventId: otherEventId, vendorId: new mongoose.Types.ObjectId('64c000000000000000000b02'), buyerId,
+      items: [{ menuItemId: new mongoose.Types.ObjectId(), name: 'Lager', unitPrice: 2500, quantity: 1, lineTotal: 2500 }],
+      subtotal: 2500, serviceFeeAmount: 200, amountCharged: 2700,
+      paymentMethod: PaymentMethod.KESHLESS_WALLET, paymentStatus: PaymentStatus.COMPLETED,
+    });
+
+    const res = await scan(order.orderId);
+
+    expect(res.status).toBe(404);
+  });
+
+  it('collects a READY order and stamps collectedAt', async () => {
+    const order = await paidOrder(eventId, buyerId, { fulfillmentStatus: MenuOrderFulfillmentStatus.READY });
+
+    const res = await collect(order.orderId);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.fulfillmentStatus).toBe(MenuOrderFulfillmentStatus.COLLECTED);
+    expect(res.body.data.collectedAt).toBeTruthy();
+    expect((await MenuOrder.findById(order._id))!.fulfillmentStatus).toBe(MenuOrderFulfillmentStatus.COLLECTED);
+  });
+
+  it('re-scanning an already-collected order refuses with 409 and the collection time, not a silent success', async () => {
+    const collectedAt = new Date('2026-01-01T10:00:00Z');
+    const order = await paidOrder(eventId, buyerId, { fulfillmentStatus: MenuOrderFulfillmentStatus.COLLECTED, collectedAt });
+
+    const res = await collect(order.orderId);
+
+    expect(res.status).toBe(409);
+    expect(res.body.message).toMatch(/already collected/i);
+    expect(res.body.message).toContain(collectedAt.toLocaleString());
+  });
+
+  it('refuses to collect an order that has not reached ready (new → collected skips ahead)', async () => {
+    const order = await paidOrder(eventId, buyerId);
+
+    const res = await collect(order.orderId);
+
+    expect(res.status).toBe(409);
+    expect((await MenuOrder.findById(order._id))!.fulfillmentStatus).toBe(MenuOrderFulfillmentStatus.NEW);
+  });
+
+  it('a scan that races a second scan collects exactly once (no double-redemption)', async () => {
+    const order = await paidOrder(eventId, buyerId, { fulfillmentStatus: MenuOrderFulfillmentStatus.READY });
+
+    const [first, second] = await Promise.all([collect(order.orderId), collect(order.orderId)]);
+    const statuses = [first.status, second.status].sort();
+
+    expect(statuses).toEqual([200, 409]);
+  });
+});
