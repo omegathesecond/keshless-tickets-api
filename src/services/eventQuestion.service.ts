@@ -130,6 +130,19 @@ export async function listRecent(actor: SocialActor | null, limit = 20): Promise
 }
 
 /**
+ * The most recent GENERAL posts (no event) — powers "Chat with Everyone"
+ * (EveryoneChatPage), which deliberately shows ONLY general posts so it
+ * never surfaces an event, keeping event-specific discussion inside each
+ * event's own chat. Sibling of listRecent, which is cross-event (event +
+ * general mixed) and powers TopicsPage's Topics section instead.
+ */
+export async function listRecentGeneral(actor: SocialActor | null, limit = 20): Promise<any[]> {
+  const questions = await EventQuestion.find({ eventId: { $exists: false } }).sort({ createdAt: -1 }).limit(limit).lean();
+  const hydrated = await hydrateQuestions(questions, actor);
+  return hydrated.map((q) => ({ ...q, event: null }));
+}
+
+/**
  * Post a new question. `eventId` scopes it to that event's Q&A thread; pass
  * null for a general "Chat with Everyone" post, which isn't about any one
  * event (see EventQuestionController.createGeneral).

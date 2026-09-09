@@ -278,6 +278,20 @@ describe('event Q&A routes', () => {
       expect(single.body.data.replies).toHaveLength(1);
       expect(single.body.data.viewerHasLiked).toBe(true);
     });
+
+    it('GET /api/public/questions/general returns only general posts, never an event-scoped one', async () => {
+      const { eventId } = await seedPublishedEvent();
+      await seedBuyer();
+      const auth = `Bearer ${signBuyerToken(PHONE)}`;
+
+      await request(app).post(`/api/community/${eventId}/questions`).set('Authorization', auth).send({ body: 'Event-scoped post' }).expect(201);
+      const general = await request(app).post('/api/community/questions').set('Authorization', auth).send({ body: 'General post' }).expect(201);
+
+      const res = await request(app).get('/api/public/questions/general').set('Authorization', auth).expect(200);
+      expect(res.body.data.questions).toHaveLength(1);
+      expect(res.body.data.questions[0].id).toBe(general.body.data.id);
+      expect(res.body.data.questions[0].event).toBeNull();
+    });
   });
 
   describe('social suspension enforcement', () => {
