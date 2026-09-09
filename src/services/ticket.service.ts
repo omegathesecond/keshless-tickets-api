@@ -2197,6 +2197,67 @@ export class TicketService {
   }
 
   /**
+   * Reconciliation backstop for MTN MoMo, and the ONLY thing that resolves a
+   * lapsed MoMo sale now that ReservationService.sweepExpired no longer fails
+   * one on a timer. Mirrors reconcilePendingCardSales: asks MTN via
+   * finalizeMomoSale (SUCCESSFUL→mint, FAILED→release+fail, PENDING→untouched),
+   * which is idempotent and pending-safe, so re-running is harmless. It mints a
+   * settled debit even when the hold was already released — confirm() then
+   * no-ops and only `sold` is incremented, so there is no double-decrement.
+   *
+   * Why MoMo needs this more than card does: MTN's callback is fire-and-forget
+   * with no retry, and the buyer's poll dies the moment they close the tab. When
+   * both miss there is no other listener. On 2026-09-08 a buyer polled 40 times
+   * over two minutes, gave up, and MTN reported SUCCESSFUL afterwards — E308
+   * debited, no ticket, and nothing in the system ever asked.
+   *
+   * `olderThanMs` skips brand-new sales where the payer is still entering their
+   * PIN. `maxPendingMs` is the safety net at the other end: a sale MTN STILL
+   * reports non-successful after this long is abandoned and loud-failed, so
+   * removing the sweep's verdict cannot leave sales PENDING forever. That fail
+   * is safe because finalizeMomoSale has just confirmed, on this same pass, that
+   * MTN does not consider it successful — a verdict from the processor, not a clock.
+   */
+  static async reconcilePendingMomoSales(
+    olderThanMs = 60_000,
+    maxPendingMs = 60 * 60_000,
+  ): Promise<number> {
+    const cutoff = new Date(Date.now() - olderThanMs);
+    const stuck = await TicketSale.find({
+      paymentMethod: PaymentMethod.MTN_MOMO,
+      paymentStatus: PaymentStatus.PENDING,
+      momoReferenceId: { $exists: true, $nin: [null, ''] },
+      createdAt: { $lt: cutoff },
+    }).limit(50);
+
+    let finalized = 0;
+    for (const sale of stuck) {
+      try {
+        const r = await this.finalizeMomoSale(sale.momoReferenceId as string);
+        if (r.status !== 'pending') { finalized++; continue; }
+
+        const ageMs = Date.now() - new Date((sale as any).createdAt).getTime();
+        if (ageMs > maxPendingMs) {
+          console.warn('[momo-reconcile] abandoned past max pending window — failing', {
+            saleId: sale.saleId,
+            referenceId: sale.momoReferenceId,
+            ageMs,
+          });
+          await ReservationService.release(sale._id.toString());
+          await TicketSale.updateOne(
+            { _id: sale._id, paymentStatus: PaymentStatus.PENDING },
+            { $set: { paymentStatus: PaymentStatus.FAILED, momoFailureReason: 'RECONCILE_TIMEOUT' } },
+          );
+        }
+      } catch (err) {
+        console.error(`[momo-reconcile] failed for sale ${sale.saleId}`, err);
+      }
+    }
+    if (finalized > 0) console.log(`[momo-reconcile] finalised ${finalized}/${stuck.length} stuck momo sale(s)`);
+    return finalized;
+  }
+
+  /**
    * Finalize a DeltaPay hosted-checkout sale identified by its session ID. Idempotent.
    *
    * - Sale not PENDING → return current status immediately (no re-mint).

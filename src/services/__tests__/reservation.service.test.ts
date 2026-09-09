@@ -162,4 +162,52 @@ describe('ReservationService.sweepExpired', () => {
     const updatedSale = await TicketSale.findById(saleId);
     expect(updatedSale!.paymentStatus).toBe(PaymentStatus.FAILED);
   });
+
+  // Regression: a MoMo request-to-pay can settle AFTER our 5-minute hold lapses
+  // (slow PIN entry). Failing the sale on a TIMER, without ever asking MTN,
+  // destroys a real debit — the buyer is charged and no ticket is ever minted.
+  // The hold must still be freed; only the payment VERDICT is deferred to the
+  // processor-authoritative reconcile.
+  it('frees the hold but leaves a lapsed MoMo sale PENDING when MTN can still be asked', async () => {
+    const { eventId, ticketTypeId, saleId } = await seedEventAndSale();
+    await TicketSale.updateOne({ _id: saleId }, { $set: { momoReferenceId: 'REF-LATE-SETTLE' } });
+
+    await ReservationService.reserve({
+      eventId,
+      lines: [{ ticketTypeId, quantity: 3 }],
+      saleId,
+      ttlMs: -1000, // already expired
+    });
+
+    await ReservationService.sweepExpired();
+
+    // Inventory is freed — no oversell risk from deferring the verdict.
+    const updated = await Event.findById(eventId);
+    const tt = updated!.ticketTypes[0]!;
+    expect(tt.reserved).toBe(0);
+    expect(tt.available).toBe(10);
+
+    // ...but the sale is untouched, so a late SUCCESSFUL can still mint it.
+    const updatedSale = await TicketSale.findById(saleId);
+    expect(updatedSale!.paymentStatus).toBe(PaymentStatus.PENDING);
+  });
+
+  // The carve-out is conditional on being ABLE to ask. With no referenceId there
+  // is nothing to query, so the sale must still fail on expiry rather than
+  // linger PENDING forever.
+  it('still fails a lapsed MoMo sale that has no referenceId to query', async () => {
+    const { eventId, ticketTypeId, saleId } = await seedEventAndSale();
+
+    await ReservationService.reserve({
+      eventId,
+      lines: [{ ticketTypeId, quantity: 3 }],
+      saleId,
+      ttlMs: -1000,
+    });
+
+    await ReservationService.sweepExpired();
+
+    const updatedSale = await TicketSale.findById(saleId);
+    expect(updatedSale!.paymentStatus).toBe(PaymentStatus.FAILED);
+  });
 });

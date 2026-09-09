@@ -19,6 +19,13 @@ const CARD_RECONCILE_MS = 60_000;
 // minted, never failed. See TicketService.reconcilePendingDeltapaySales.
 const DELTAPAY_RECONCILE_MS = 60_000;
 
+// Reconcile paid-but-stuck MTN MoMo sales (fire-and-forget callback missed AND
+// the buyer's poll stopped). Since ReservationService.sweepExpired no longer
+// fails a queryable MoMo sale on a timer, this is the ONLY thing that resolves
+// one — both to mint a late settlement and to loud-fail a truly abandoned sale.
+// See TicketService.reconcilePendingMomoSales.
+const MOMO_RECONCILE_MS = 60_000;
+
 // Yoco: report (never resolve) sales stuck PENDING because no signed webhook
 // arrived. Yoco has NO status-query endpoint, so unlike the card/DeltaPay
 // reconcilers above this one cannot ask the provider what happened — it makes
@@ -94,6 +101,10 @@ export function startBackgroundTasks(): NodeJS.Timeout[] {
   handles.push(setInterval(() => {
     TicketService.reconcilePendingDeltapaySales().catch(err => console.error('[deltapay-reconcile] error', err));
   }, DELTAPAY_RECONCILE_MS));
+
+  handles.push(setInterval(() => {
+    TicketService.reconcilePendingMomoSales().catch(err => console.error('[momo-reconcile] error', err));
+  }, MOMO_RECONCILE_MS));
 
   handles.push(setInterval(() => {
     TicketService.reportStuckYocoSales().catch(err => console.error('[yoco-stuck] error', err));

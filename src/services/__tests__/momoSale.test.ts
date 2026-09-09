@@ -459,3 +459,129 @@ describe('TicketService.finalizeMomoSale', () => {
     expect(tt.reserved).toBe(0);
   });
 });
+
+/**
+ * The backstop that makes the sweep's MoMo carve-out safe. MTN's callback is
+ * fire-and-forget and the buyer's poll stops when they close the tab, so
+ * without this nothing ever asks MTN and a settled debit never becomes a
+ * ticket (incident 2026-09-08: E308 taken, no ticket).
+ *
+ * `createdAt` is immutable under `timestamps: true`, so age is forced through
+ * the raw driver — `Model.updateOne` would silently drop the $set.
+ */
+describe('TicketService.reconcilePendingMomoSales', () => {
+  async function ageSale(referenceId: string, ageMs: number) {
+    await TicketSale.collection.updateOne(
+      { momoReferenceId: referenceId },
+      { $set: { createdAt: new Date(Date.now() - ageMs) } }
+    );
+  }
+
+  it('mints a stuck PENDING sale that MTN reports SUCCESSFUL', async () => {
+    const { eventId, ticketTypeId } = await seedPublishedEvent();
+
+    mockMomoInstance.isConfigured.mockReturnValue(true);
+    mockMomoInstance.requestToPay.mockResolvedValue({ referenceId: 'R_STUCK' });
+    // The buyer's poll only ever saw PENDING, then they gave up.
+    mockMomoInstance.getStatus.mockResolvedValue({ status: 'PENDING', raw: {} });
+
+    await TicketService.initiateMomoPurchase({
+      eventId,
+      items: [{ ticketTypeId, quantity: 2 }],
+      customerPhone: '+26876333333',
+      momoPhone: '26876333333',
+    });
+
+    // MTN settles late — exactly what the callback+poll both missed.
+    mockMomoInstance.getStatus.mockResolvedValue({
+      status: 'SUCCESSFUL',
+      raw: { amount: '200', currency: 'SZL' },
+    });
+    await ageSale('R_STUCK', 5 * 60_000);
+
+    const finalized = await TicketService.reconcilePendingMomoSales();
+    expect(finalized).toBe(1);
+
+    const sale = await TicketSale.findOne({ momoReferenceId: 'R_STUCK' });
+    expect(sale!.paymentStatus).toBe(PaymentStatus.COMPLETED);
+    expect(sale!.ticketIds.length).toBe(2);
+
+    const updatedEvent = await Event.findById(eventId);
+    expect(updatedEvent!.ticketTypes[0]!.sold).toBe(2);
+  });
+
+  it('skips sales younger than olderThanMs so the payer is not cut off mid-PIN', async () => {
+    const { eventId, ticketTypeId } = await seedPublishedEvent();
+
+    mockMomoInstance.isConfigured.mockReturnValue(true);
+    mockMomoInstance.requestToPay.mockResolvedValue({ referenceId: 'R_FRESH' });
+    mockMomoInstance.getStatus.mockResolvedValue({ status: 'PENDING', raw: {} });
+
+    await TicketService.initiateMomoPurchase({
+      eventId,
+      items: [{ ticketTypeId, quantity: 1 }],
+      customerPhone: '+26876444444',
+      momoPhone: '26876444444',
+    });
+
+    // Brand new sale — must not even be asked.
+    mockMomoInstance.getStatus.mockClear();
+    const finalized = await TicketService.reconcilePendingMomoSales();
+
+    expect(finalized).toBe(0);
+    expect(mockMomoInstance.getStatus).not.toHaveBeenCalled();
+
+    const sale = await TicketSale.findOne({ momoReferenceId: 'R_FRESH' });
+    expect(sale!.paymentStatus).toBe(PaymentStatus.PENDING);
+  });
+
+  it('leaves a still-PENDING sale alone while it is inside maxPendingMs', async () => {
+    const { eventId, ticketTypeId } = await seedPublishedEvent();
+
+    mockMomoInstance.isConfigured.mockReturnValue(true);
+    mockMomoInstance.requestToPay.mockResolvedValue({ referenceId: 'R_SLOW' });
+    mockMomoInstance.getStatus.mockResolvedValue({ status: 'PENDING', raw: {} });
+
+    await TicketService.initiateMomoPurchase({
+      eventId,
+      items: [{ ticketTypeId, quantity: 1 }],
+      customerPhone: '+26876555555',
+      momoPhone: '26876555555',
+    });
+
+    await ageSale('R_SLOW', 5 * 60_000);
+    const finalized = await TicketService.reconcilePendingMomoSales();
+
+    expect(finalized).toBe(0);
+    const sale = await TicketSale.findOne({ momoReferenceId: 'R_SLOW' });
+    expect(sale!.paymentStatus).toBe(PaymentStatus.PENDING);
+  });
+
+  it('loud-fails a sale MTN still reports non-successful past maxPendingMs', async () => {
+    const { eventId, ticketTypeId } = await seedPublishedEvent();
+
+    mockMomoInstance.isConfigured.mockReturnValue(true);
+    mockMomoInstance.requestToPay.mockResolvedValue({ referenceId: 'R_ABANDONED' });
+    mockMomoInstance.getStatus.mockResolvedValue({ status: 'PENDING', raw: {} });
+
+    await TicketService.initiateMomoPurchase({
+      eventId,
+      items: [{ ticketTypeId, quantity: 1 }],
+      customerPhone: '+26876666666',
+      momoPhone: '26876666666',
+    });
+
+    // Older than the 60-min ceiling and MTN still will not confirm it.
+    await ageSale('R_ABANDONED', 2 * 60 * 60_000);
+    await TicketService.reconcilePendingMomoSales();
+
+    const sale = await TicketSale.findOne({ momoReferenceId: 'R_ABANDONED' });
+    expect(sale!.paymentStatus).toBe(PaymentStatus.FAILED);
+    expect(sale!.momoFailureReason).toBe('RECONCILE_TIMEOUT');
+    expect(sale!.ticketIds.length).toBe(0);
+
+    // The hold must be gone too, so the inventory is not stranded.
+    const updatedEvent = await Event.findById(eventId);
+    expect(updatedEvent!.ticketTypes[0]!.reserved).toBe(0);
+  });
+});

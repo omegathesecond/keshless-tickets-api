@@ -58,12 +58,12 @@ export class ReservationService {
    * Rails whose lapsed PENDING sale must NOT be auto-failed by the sweep.
    *
    * Note what "recoverable" actually means here: this sweep fails a lapsed sale
-   * WITHOUT asking the provider. Peach, DeltaPay and MoMo are safe only because
-   * their reconcile jobs run on a shorter interval than the hold, so a paid sale
-   * is normally resolved before the sweep reaches it. Once a sale is FAILED,
+   * WITHOUT asking the provider. Peach and DeltaPay are safe only because their
+   * reconcile jobs run on a shorter interval than the hold, so a paid sale is
+   * normally resolved before the sweep reaches it. Once a sale is FAILED,
    * every finalizer early-returns 'failed' — there is no path back for any rail.
    *
-   * Two rails are therefore carved out entirely:
+   * Two rails are carved out entirely:
    *
    * - YOCO publishes NO status-query endpoint, so a late signed webhook is the
    *   only thing that can ever mint it.
@@ -74,6 +74,17 @@ export class ReservationService {
    *   itself reports EXPIRED or CANCELLED. An abandoned sale therefore stays
    *   PENDING locally until YeboPay expires the checkout, which is slower but
    *   never wrong.
+   *
+   * MTN MoMo is carved out CONDITIONALLY (see sweepExpired): a request-to-pay
+   * routinely settles AFTER the 5-minute hold lapses, because the payer is
+   * entering a PIN on a handset, and MTN's callback is fire-and-forget with no
+   * retry. Losing that race is not hypothetical — on 2026-09-08 a lapsed MoMo
+   * sale was failed by this timer while MTN went on to report SUCCESSFUL, and
+   * the buyer was debited E308 for a ticket that was never minted. MoMo DOES
+   * publish a status endpoint, so the verdict belongs to
+   * TicketService.reconcilePendingMomoSales, never to a clock. The carve-out is
+   * conditional because it requires a momoReferenceId to query: a MoMo sale
+   * without one can never be asked and must still fail on expiry.
    *
    * The inventory hold is still released for these rails — only the sale status
    * is left alone, so there is no oversell risk from the delay.
@@ -98,6 +109,15 @@ export class ReservationService {
             _id: r.saleId,
             paymentStatus: PaymentStatus.PENDING,
             paymentMethod: { $nin: this.NO_AUTO_FAIL_METHODS },
+            // Conditional MoMo carve-out: a sale we can still ask MTN about is
+            // owned by reconcilePendingMomoSales, not by this timer. One filter,
+            // so the guard stays atomic with the claim.
+            $nor: [
+              {
+                paymentMethod: PaymentMethod.MTN_MOMO,
+                momoReferenceId: { $exists: true, $nin: [null, ''] },
+              },
+            ],
           },
           { $set: { paymentStatus: PaymentStatus.FAILED } }
         );
