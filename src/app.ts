@@ -51,6 +51,7 @@ import transportRoutes from '@routes/transport.route';
 import transportPosRoutes from '@routes/transportPos.route';
 import vendorSocialRoutes from '@routes/vendorSocial.route';
 import vendorDmRoutes from '@routes/vendorDm.route';
+import eventPlanRoutes from '@routes/eventPlan.route';
 
 // Realtime bus
 import { ensureAdapterCollection } from '@/realtime/adapterCollection';
@@ -178,6 +179,7 @@ app.use('/api/merchant', merchantRoutes);          // Merchant tap-to-pay (cashl
 app.use('/api/cashier', cashierRoutes);            // Cashier desk — in-venue top-up + cash-out (cashless spec)
 app.use('/api/waiter', waiterRoutes);              // Waiter floor — table tabs across stalls (cashless spec)
 app.use('/api/community', communityRoutes);          // Event communities (buyer social)
+app.use('/api/social/plans', eventPlanRoutes);       // Plans With Friends — mounted before the broader /api/social below so this specific path isn't shadowed
 app.use('/api/social', socialRoutes);                // Buyer social profiles
 app.use('/api/dm', dmRoutes);                        // Direct & group messages
 
