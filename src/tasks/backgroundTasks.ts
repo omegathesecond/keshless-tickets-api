@@ -5,6 +5,7 @@ import { reconcileStuckUpdates, reconcileStuckStories } from '@services/transcod
 import { BookingService } from '@services/transport/booking.service';
 import { MenuOrderService } from '@services/menuOrder.service';
 import { ReconciliationService } from '@services/reconciliation.service';
+import { AccountActivityDigestService } from '@services/accountActivityDigest.service';
 
 // Start the reservation expiry sweep
 const RESERVATION_SWEEP_MS = 60_000;
@@ -78,6 +79,13 @@ const MENU_MOMO_RECONCILE_MS = 60_000;
 // latency. See ReconciliationService.sweepRecentCashlessEvents.
 const CASHLESS_RECONCILE_MS = 900_000;
 
+// My Account tab (Activity page): grouped push digest for profile/Story/post
+// views — see AccountActivityDigestService.sweep. 30 minutes: frequent
+// enough that "today" in the push copy stays true across a normal browsing
+// session, coarse enough that a burst of views lands as one summary rather
+// than one push per sweep tick.
+const ACCOUNT_ACTIVITY_DIGEST_MS = 1_800_000;
+
 /**
  * Registers all periodic background sweeps (reservation expiry, card-sale
  * reconciliation, event reminders, stuck-update reconciliation) with their
@@ -141,6 +149,10 @@ export function startBackgroundTasks(): NodeJS.Timeout[] {
   handles.push(setInterval(() => {
     ReconciliationService.sweepRecentCashlessEvents().catch(err => console.error('[cashless-reconcile] error', err));
   }, CASHLESS_RECONCILE_MS));
+
+  handles.push(setInterval(() => {
+    AccountActivityDigestService.sweep().catch(err => console.error('[account-activity-digest] error', err));
+  }, ACCOUNT_ACTIVITY_DIGEST_MS));
 
   return handles;
 }

@@ -24,7 +24,7 @@ router.get('/:id', optionalTicketsAuth, UpdateController.getOne);
 router.post('/:id/like', authenticateBuyer, requireProfilePhoto, UpdateController.react('like'));
 router.post('/:id/save', authenticateBuyer, UpdateController.react('save'));
 router.post('/:id/share', UpdateController.share);
-router.post('/:id/view', UpdateController.recordView);
+router.post('/:id/view', optionalTicketsAuth, UpdateController.recordView);
 router.delete('/:id', optionalTicketsAuth, UpdateController.remove);
 
 export default router;

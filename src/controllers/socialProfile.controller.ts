@@ -15,6 +15,7 @@ import { FollowService } from '@services/follow.service';
 import { FollowTargetType } from '@models/follow.model';
 import { NotificationService } from '@services/notification.service';
 import { SocialProfileViewService } from '@services/socialProfileView.service';
+import { AccountActivityService } from '@services/accountActivity.service';
 import { HEX24, failWithHttpError, parseMessageCursorParams } from '@utils/controllerHelpers.util';
 import { onlineBuyerIds } from '@utils/buyerOnline.util';
 import { DmEligibilityService } from '@services/dmEligibility.service';
@@ -53,6 +54,7 @@ export class SocialProfileController {
       bio: buyer.bio ?? null,
       dmPrivacy: buyer.dmPrivacy,
       notificationPrefs: buyer.notificationPrefs,
+      activityViewHistoryDisabled: Boolean(buyer.activityViewHistoryDisabled),
     };
   }
 
@@ -133,6 +135,7 @@ export class SocialProfileController {
       }
       if (value.bio !== undefined) buyer.bio = value.bio;
       if (value.dmPrivacy !== undefined) buyer.dmPrivacy = value.dmPrivacy;
+      if (value.activityViewHistoryDisabled !== undefined) buyer.activityViewHistoryDisabled = value.activityViewHistoryDisabled;
       if (value.notificationPrefs !== undefined) {
         Object.assign(buyer.notificationPrefs, value.notificationPrefs);
         buyer.markModified('notificationPrefs');
@@ -196,6 +199,12 @@ export class SocialProfileController {
 
       const profile = await SocialProfileViewService.forViewer(username, { type: 'buyer', id: String(viewer._id) });
       if (!profile) return ApiResponseUtil.error(res, 'User not found', 404);
+      // My Account insight (spec §1) — best-effort, never blocks the profile
+      // response. record() itself no-ops on self-views, blocks, and a
+      // disabled view-history privacy setting (spec §6).
+      AccountActivityService.record({
+        ownerId: profile.id, actorType: 'buyer', actorId: String(viewer._id), kind: 'profile_view',
+      }).catch((err) => console.error('[account-activity] profile_view record failed:', err));
       return ApiResponseUtil.success(res, profile);
     } catch (error: any) {
       console.error('Get public profile error:', error);

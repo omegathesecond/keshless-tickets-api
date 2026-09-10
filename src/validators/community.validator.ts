@@ -10,6 +10,7 @@ export const updateProfileSchema = Joi.object({
   name: Joi.string().trim().min(1).max(100).optional(),
   bio: Joi.string().allow('').max(280).optional(),
   dmPrivacy: Joi.string().valid('community', 'friends').optional(),
+  activityViewHistoryDisabled: Joi.boolean().optional(),
   notificationPrefs: Joi.object({
     announcements: Joi.boolean(),
     dms: Joi.boolean(),
