@@ -4,6 +4,7 @@ import { requireProfilePhoto } from '@middleware/requirePhoto.middleware';
 import { VendorSocialController } from '@controllers/vendorSocial.controller';
 import { VendorConsumerReadsController } from '@controllers/vendorConsumerReads.controller';
 import { StoryController } from '@controllers/story.controller';
+import { AccountActivityController } from '@controllers/accountActivity.controller';
 
 // Vendor (organizer brand) social-graph endpoints. Mounted at
 // /api/tickets/social — see src/app.ts, placed before the broader
@@ -19,6 +20,13 @@ router.post('/follow', authenticateTickets, requireProfilePhoto, VendorSocialCon
 router.delete('/follow/:targetType/:targetId', authenticateTickets, VendorSocialController.unfollow);
 router.get('/me/following', authenticateTickets, VendorSocialController.following);
 router.get('/me/followers', authenticateTickets, VendorSocialController.followers);
+// My Account tab (spec §1) — the organizer-brand twin of the buyer
+// /api/social/me/account-activity mount in @routes/social.route. Same
+// AccountActivityService (ownerId is actor-agnostic already), just entered
+// through the vendor token so the owner is the brand, not a buyer.
+router.get('/me/account-activity', authenticateTickets, AccountActivityController.listAsVendor);
+router.post('/me/account-activity/read', authenticateTickets, AccountActivityController.markReadAsVendor);
+router.post('/me/account-activity/read-all', authenticateTickets, AccountActivityController.markAllReadAsVendor);
 // '/users/search' MUST be registered BEFORE '/users/:username' or "search" is captured as a username.
 router.get('/users/search', authenticateTickets, VendorSocialController.searchUsers);
 router.get('/users/:username', authenticateTickets, VendorSocialController.publicProfile);
