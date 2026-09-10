@@ -1,6 +1,6 @@
 import { Schema, model, Document, Types } from 'mongoose';
 
-export type NotificationType = 'announcement' | 'dm' | 'mention' | 'friend' | 'event_reminder' | 'follow' | 'meetup_request' | 'meetup_accepted' | 'enquiry_received' | 'story_like' | 'low_stock';
+export type NotificationType = 'announcement' | 'dm' | 'mention' | 'friend' | 'event_reminder' | 'follow' | 'meetup_request' | 'meetup_accepted' | 'enquiry_received' | 'story_like' | 'low_stock' | 'vote_opened' | 'vote_reminder' | 'vote_tag_request' | 'vote_tag_response';
 
 export type NotificationRecipientType = 'buyer' | 'vendor';
 
@@ -24,7 +24,7 @@ const notificationSchema = new Schema<INotification>(
     recipientId: { type: Schema.Types.ObjectId, required: true },
     type: {
       type: String,
-      enum: ['announcement', 'dm', 'mention', 'friend', 'event_reminder', 'follow', 'meetup_request', 'meetup_accepted', 'enquiry_received', 'story_like', 'low_stock'],
+      enum: ['announcement', 'dm', 'mention', 'friend', 'event_reminder', 'follow', 'meetup_request', 'meetup_accepted', 'enquiry_received', 'story_like', 'low_stock', 'vote_opened', 'vote_reminder', 'vote_tag_request', 'vote_tag_response'],
       required: true,
     },
     title: { type: String, required: true, trim: true, maxlength: 120 },
@@ -57,6 +57,20 @@ notificationSchema.index({ recipientType: 1, recipientId: 1, readAt: 1 });
 notificationSchema.index(
   { recipientId: 1, type: 1, 'data.eventId': 1, 'data.kind': 1 },
   { unique: true, partialFilterExpression: { type: 'event_reminder' } }
+);
+
+// Vote notification limits (spec §8): "one notification when the Vote opens"
+// and "a maximum of one optional reminder" — both PER (recipient, event),
+// never per question. Two separate partial indexes (not one $in-based
+// filter — partialFilterExpression doesn't support $in) with explicit names
+// so their identical key shape doesn't collide with Mongoose's auto-naming.
+notificationSchema.index(
+  { recipientId: 1, type: 1, 'data.eventId': 1 },
+  { unique: true, partialFilterExpression: { type: 'vote_opened' }, name: 'vote_opened_dedupe' }
+);
+notificationSchema.index(
+  { recipientId: 1, type: 1, 'data.eventId': 1 },
+  { unique: true, partialFilterExpression: { type: 'vote_reminder' }, name: 'vote_reminder_dedupe' }
 );
 
 export const Notification = model<INotification>('Notification', notificationSchema);

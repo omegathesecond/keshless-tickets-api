@@ -39,6 +39,7 @@ import { ModerationController } from '@controllers/moderation.controller';
 import { ReportController } from '@controllers/report.controller';
 import { EnquiryController } from '@controllers/enquiry.controller';
 import { UpdateController } from '@controllers/update.controller';
+import { VoteAdminController } from '@controllers/voteAdmin.controller';
 
 const router = Router();
 
@@ -637,6 +638,18 @@ router.get('/events/:eventId/cashless/reconciliation', requireSuperAdmin, Cashle
  * ORDER MATTERS: the literal /tags/summary must stay above /tags/:walletId,
  * or Express matches "summary" as a wallet id.
  */
+/**
+ * Vote (organizer dashboard §9) — preview before activation, genuine
+ * participation stats + results + song suggestions once open, and
+ * discussion moderation. Ownership (or super-admin) is enforced inside
+ * vote.service/voteDiscussion.service, same pattern as
+ * ModerationController's community routes below.
+ */
+router.get('/events/:eventId/vote/preview', requireTicketsPermission(TicketsPermission.VIEW_STATS), VoteAdminController.preview);
+router.get('/events/:eventId/vote/summary', requireTicketsPermission(TicketsPermission.VIEW_STATS), VoteAdminController.summary);
+router.get('/vote-questions/:questionId/comments', requireTicketsPermission(TicketsPermission.VIEW_STATS), VoteAdminController.comments);
+router.delete('/vote-comments/:commentId', requireTicketsPermission(TicketsPermission.MANAGE_ACCESS), VoteAdminController.removeComment);
+
 router.get('/events/:eventId/tags/summary', requireTicketsPermission(TicketsPermission.VIEW_REVENUE), TagReportController.summary);
 router.get('/events/:eventId/tags/registrations', requireTicketsPermission(TicketsPermission.VIEW_REVENUE), TagReportController.registrations);
 

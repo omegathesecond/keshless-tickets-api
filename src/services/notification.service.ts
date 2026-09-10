@@ -64,7 +64,7 @@ export class NotificationService {
     } catch (err: any) {
       // Concurrent reminder sweeps race the dedupe read; the partial unique
       // index makes the second insert a no-op instead of a duplicate row.
-      if (err?.code === 11000 && type === 'event_reminder') return null;
+      if (err?.code === 11000 && (type === 'event_reminder' || type === 'vote_opened' || type === 'vote_reminder')) return null;
       throw err;
     }
   }

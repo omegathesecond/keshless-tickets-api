@@ -16,6 +16,7 @@ import { authenticateBuyer, authenticateBuyerOrOrganizer, optionalTicketsAuth } 
 import { requireProfilePhoto } from '@middleware/requirePhoto.middleware';
 import { avatarUpload, communityEventUpload, handleMulterError, validateFileUpload } from '@middleware/media.middleware';
 import { CommunityEventSubmitController } from '@controllers/communityEventSubmit.controller';
+import { VoteController } from '@controllers/vote.controller';
 
 const router = Router();
 
@@ -136,6 +137,24 @@ router.get('/updates/by/:authorType/:authorId', optionalTicketsAuth, UpdateContr
  * @query   cursor (createdAt ISO string of the last item on the prior page)
  */
 router.get('/updates/for-event/:eventId', optionalTicketsAuth, UpdateController.listByEvent);
+
+/**
+ * Vote (spec: event-engagement voting feature). Event-detail page (§3) +
+ * Home feed cards (§4) read this; casting a vote, suggesting a song, tagging
+ * an attendee and joining the discussion all require a signed-in buyer (§5,
+ * §2, §7) — matching the meetup/story write routes above.
+ */
+router.get('/events/:eventId/vote', optionalTicketsAuth, VoteController.get);
+router.post('/events/:eventId/vote/:questionId', authenticateBuyer, VoteController.cast);
+router.post('/events/:eventId/vote/:questionId/songs', authenticateBuyer, VoteController.suggestSong);
+router.post('/events/:eventId/vote/:questionId/tags', authenticateBuyer, VoteController.requestTag);
+router.post('/vote-tags/:tagId/confirm', authenticateBuyer, VoteController.confirmTag);
+router.post('/vote-tags/:tagId/decline', authenticateBuyer, VoteController.declineTag);
+router.delete('/vote-tags/:tagId', authenticateBuyer, VoteController.removeTag);
+router.get('/vote-questions/:questionId/comments', optionalTicketsAuth, VoteController.listComments);
+router.post('/vote-questions/:questionId/comments', authenticateBuyerOrOrganizer, VoteController.postComment);
+router.post('/vote-comments/:commentId/react', authenticateBuyerOrOrganizer, VoteController.reactToComment);
+router.delete('/vote-comments/:commentId', authenticateBuyerOrOrganizer, VoteController.deleteComment);
 
 /**
  * @route   GET /api/public/events/live

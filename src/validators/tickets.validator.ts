@@ -329,6 +329,10 @@ export const createEventSchema = Joi.object({
   }),
   priceMin: Joi.number().min(0).optional(),
   priceMax: Joi.number().min(0).optional(),
+  // Vote feature inputs — see event.model.ts. Optional; absent skips the
+  // question they gate (artist / outfit-theme voting) entirely.
+  lineup: Joi.array().items(Joi.string().trim().max(100)).max(50).optional(),
+  outfitThemeOptions: Joi.array().items(Joi.string().trim().max(60)).max(20).optional(),
 }).custom(priceRangeCheck);
 
 export const updateEventSchema = Joi.object({
@@ -383,6 +387,8 @@ export const updateEventSchema = Joi.object({
   }),
   priceMin: Joi.number().min(0).optional(),
   priceMax: Joi.number().min(0).optional(),
+  lineup: Joi.array().items(Joi.string().trim().max(100)).max(50).optional(),
+  outfitThemeOptions: Joi.array().items(Joi.string().trim().max(60)).max(20).optional(),
 }).min(1).custom(priceRangeCheck).messages({
   'object.min': 'At least one field must be provided for update'
 });

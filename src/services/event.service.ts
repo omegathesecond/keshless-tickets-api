@@ -36,6 +36,8 @@ export interface CreateEventParams {
   currency?: 'SZL' | 'ZAR';
   priceMin?: number;
   priceMax?: number;
+  lineup?: string[];
+  outfitThemeOptions?: string[];
 }
 
 export interface UpdateEventParams {
@@ -66,6 +68,8 @@ export interface UpdateEventParams {
   currency?: 'SZL' | 'ZAR';
   priceMin?: number;
   priceMax?: number;
+  lineup?: string[];
+  outfitThemeOptions?: string[];
 }
 
 export interface GetEventsQuery {
@@ -127,6 +131,8 @@ export class EventService {
         currency: params.currency ?? 'SZL',
         priceMin: params.priceMin,
         priceMax: params.priceMax,
+        lineup: params.lineup,
+        outfitThemeOptions: params.outfitThemeOptions,
         ticketTypes: params.ticketTypes ? params.ticketTypes.map(tt => ({
           name: tt.name,
           description: tt.description,
@@ -456,6 +462,14 @@ export class EventService {
       if (updates.currency) event.currency = updates.currency;
       if (updates.priceMin !== undefined) event.priceMin = updates.priceMin;
       if (updates.priceMax !== undefined) event.priceMax = updates.priceMax;
+      // Vote question inputs. Deliberately NOT part of the core-info lock
+      // above — an organizer may keep refining the lineup/outfit options
+      // after publishing. This can't retroactively change a Vote question
+      // that has already been materialized (see vote.service's
+      // ensureVoteQuestions — options are snapshotted once, at first read
+      // after the Vote opens, and never re-synced from the event).
+      if (updates.lineup !== undefined) event.lineup = updates.lineup;
+      if (updates.outfitThemeOptions !== undefined) event.outfitThemeOptions = updates.outfitThemeOptions;
 
       // Update ticket types if provided.
       //

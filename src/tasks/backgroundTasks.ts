@@ -5,6 +5,7 @@ import { reconcileStuckUpdates, reconcileStuckStories } from '@services/transcod
 import { BookingService } from '@services/transport/booking.service';
 import { MenuOrderService } from '@services/menuOrder.service';
 import { ReconciliationService } from '@services/reconciliation.service';
+import { VoteNotificationService } from '@services/voteNotification.service';
 
 // Start the reservation expiry sweep
 const RESERVATION_SWEEP_MS = 60_000;
@@ -71,6 +72,11 @@ const MENU_MOMO_RECONCILE_MS = 60_000;
 // latency. See ReconciliationService.sweepRecentCashlessEvents.
 const CASHLESS_RECONCILE_MS = 900_000;
 
+// Vote: materialize questions once a Vote window opens + dispatch the
+// spec §8 one-time "opened" notification and the one optional "closing soon"
+// reminder. Same cadence as the event reminder sweep.
+const VOTE_SWEEP_MS = 600_000;
+
 /**
  * Registers all periodic background sweeps (reservation expiry, card-sale
  * reconciliation, event reminders, stuck-update reconciliation) with their
@@ -130,6 +136,10 @@ export function startBackgroundTasks(): NodeJS.Timeout[] {
   handles.push(setInterval(() => {
     ReconciliationService.sweepRecentCashlessEvents().catch(err => console.error('[cashless-reconcile] error', err));
   }, CASHLESS_RECONCILE_MS));
+
+  handles.push(setInterval(() => {
+    VoteNotificationService.sweep().catch((err) => console.error('[vote-sweep] error', err));
+  }, VOTE_SWEEP_MS));
 
   return handles;
 }
