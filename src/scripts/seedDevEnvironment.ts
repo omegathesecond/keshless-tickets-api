@@ -157,6 +157,10 @@ async function seed(): Promise<void> {
     buyer = new Buyer({ phone: buyerPhone, name: process.env['SEED_BUYER_NAME'] || 'Dev Buyer' });
   }
   buyer.password = buyerPassword;
+  // A real buyer only gets this via OTP-gated registration (see
+  // BuyerAuthService.registerWithOtp) — set it here too so a seeded buyer is
+  // indistinguishable from one that actually proved phone ownership.
+  if (!buyer.phoneVerifiedAt) buyer.phoneVerifiedAt = new Date();
   await buyer.save();
   console.log(`🎟️  Buyer ready: ${buyerPhone} (id ${buyer._id})`);
 
