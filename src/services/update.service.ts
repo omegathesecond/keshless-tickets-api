@@ -8,6 +8,7 @@ import { triggerTranscode } from '@services/transcode.client';
 import type { UpdateAuthorType, UpdateKind } from '@interfaces/update.interface';
 import { isActorAuthorOf, type SocialActor } from '@utils/socialActor.util';
 import { toggleReactionGeneric } from '@services/reactions.service';
+import { AccountActivityService } from '@services/accountActivity.service';
 
 interface CreateInput {
   authorType: UpdateAuthorType;
@@ -82,8 +83,23 @@ export async function recordShare(updateId: string) {
   return { shareCount: u?.shareCount ?? 0 };
 }
 
-export async function recordView(updateId: string): Promise<{ viewCount: number }> {
-  const u = await Update.findByIdAndUpdate(updateId, { $inc: { viewCount: 1 } }, { new: true }).select('viewCount').lean();
+/**
+ * `viewCount` increments for EVERY view including anonymous ones (the
+ * public-facing counter shown on the post). `actor`, when the caller is
+ * signed in, additionally records a My Account insight for the post's
+ * author (spec §1) — buyer-authored posts only; organizer brands have their
+ * own analytics. Self-views and repeats are filtered inside
+ * AccountActivityService.record, not here.
+ */
+export async function recordView(updateId: string, actor?: SocialActor | null): Promise<{ viewCount: number }> {
+  const u = await Update.findByIdAndUpdate(updateId, { $inc: { viewCount: 1 } }, { new: true })
+    .select('viewCount authorType authorId')
+    .lean();
+  if (u && actor && u.authorType === 'buyer') {
+    AccountActivityService.record({
+      ownerId: String(u.authorId), actorType: actor.type, actorId: actor.id, kind: 'post_view', targetId: updateId,
+    }).catch((err) => console.error('[account-activity] post_view record failed:', err));
+  }
   return { viewCount: u?.viewCount ?? 0 };
 }
 

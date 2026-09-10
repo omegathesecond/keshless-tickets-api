@@ -205,7 +205,8 @@ export class UpdateController {
   }
 
   static async recordView(req: Request, res: Response): Promise<any> {
-    const r = await recordView(req.params['id'] as string);
+    const actor = await resolveActorFromRequest(req).catch(() => null);
+    const r = await recordView(req.params['id'] as string, actor);
     return ApiResponseUtil.success(res, r);
   }
 

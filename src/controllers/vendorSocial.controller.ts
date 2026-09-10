@@ -11,6 +11,7 @@ import { HEX24, failWithHttpError, parseMessageCursorParams } from '@utils/contr
 import { toBuyerSummary } from '@utils/buyerSummary.util';
 import { toVendorSummary } from '@utils/vendorSummary.util';
 import { SocialProfileViewService } from '@services/socialProfileView.service';
+import { AccountActivityService } from '@services/accountActivity.service';
 
 /** Social-graph endpoints where the acting identity is the organizer brand (Vendor). */
 export class VendorSocialController {
@@ -147,6 +148,11 @@ export class VendorSocialController {
       const username = String(req.params['username'] || '').toLowerCase();
       const profile = await SocialProfileViewService.forViewer(username, { type: 'vendor', id: vendorId });
       if (!profile) return ApiResponseUtil.error(res, 'User not found', 404);
+      // My Account insight (spec §1) — mirrors SocialProfileController.publicProfile's
+      // buyer-viewer hook so an organizer brand viewing a buyer's profile counts too.
+      AccountActivityService.record({
+        ownerId: profile.id, actorType: 'vendor', actorId: vendorId, kind: 'profile_view',
+      }).catch((err: unknown) => console.error('[account-activity] profile_view record failed:', err));
       return ApiResponseUtil.success(res, profile);
     } catch (error: any) {
       return failWithHttpError(res, error, 'Failed to load profile');

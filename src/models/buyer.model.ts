@@ -66,6 +66,12 @@ export interface IBuyer extends Document {
   // are simply invisible to $geoNear, no extra filtering needed.
   location?: IBuyerLocation;
   locationUpdatedAt?: Date;
+  // Profile-view-history privacy toggle (My Account tab, spec §6). When true,
+  // this buyer's own views of OTHER accounts (profile/story/post) are simply
+  // never recorded as an actor — see AccountActivityService.record's early
+  // return. Does NOT hide activity ON this buyer's own account; it only
+  // controls whether THIS buyer shows up in someone ELSE's insights.
+  activityViewHistoryDisabled?: boolean;
   createdAt: Date;
   updatedAt: Date;
   comparePassword(candidate: string): Promise<boolean>;
@@ -145,6 +151,7 @@ const buyerSchema = new Schema<IBuyer>(
       required: false,
     },
     locationUpdatedAt: { type: Date },
+    activityViewHistoryDisabled: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

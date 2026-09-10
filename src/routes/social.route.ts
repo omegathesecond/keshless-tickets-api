@@ -5,6 +5,7 @@ import { SocialProfileController } from '@controllers/socialProfile.controller';
 import { ConsumerReadsController } from '@controllers/consumerReads.controller';
 import { StoryController } from '@controllers/story.controller';
 import { MeetupController } from '@controllers/meetup.controller';
+import { AccountActivityController } from '@controllers/accountActivity.controller';
 
 const router = Router();
 
@@ -22,6 +23,11 @@ router.patch('/me/location', authenticateBuyer, SocialProfileController.updateLo
 router.delete('/me/location', authenticateBuyer, SocialProfileController.deleteLocation);
 router.get('/notifications', authenticateBuyer, SocialProfileController.myNotifications);
 router.post('/notifications/read', authenticateBuyer, SocialProfileController.markNotificationsRead);
+// My Account tab (Activity page) — grouped account-insight events, distinct
+// from the /notifications inbox above (spec §2, never the same rows).
+router.get('/me/account-activity', authenticateBuyer, AccountActivityController.list);
+router.post('/me/account-activity/read', authenticateBuyer, AccountActivityController.markRead);
+router.post('/me/account-activity/read-all', authenticateBuyer, AccountActivityController.markAllRead);
 router.get('/username-available', authenticateBuyer, SocialProfileController.usernameAvailable);
 router.post('/follow', authenticateBuyer, requireProfilePhoto, SocialProfileController.followTarget);
 router.delete('/follow/:targetType/:targetId', authenticateBuyer, SocialProfileController.unfollowTarget);

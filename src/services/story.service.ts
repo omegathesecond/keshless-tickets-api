@@ -9,6 +9,7 @@ import { awardStoryPointsIfEligible } from '@services/storyPoints.service';
 import { BlockService } from '@services/block.service';
 import { NotificationService } from '@services/notification.service';
 import { NotificationDispatcher } from '@services/notificationDispatcher.service';
+import { AccountActivityService } from '@services/accountActivity.service';
 import { HttpError } from '@utils/httpError.util';
 import { isActorAuthorOf, type SocialActor } from '@utils/socialActor.util';
 import type { StoryKind } from '@interfaces/story.interface';
@@ -138,6 +139,16 @@ export async function markSeen(storyId: string, actor: SocialActor): Promise<voi
     await StorySeen.create({ storyId, buyerId: actor.id, actorType: actor.type });
   } catch (err: any) {
     if (err?.code !== 11000) throw err; // already seen — idempotent
+    return; // already seen — do NOT re-record the My Account insight below
+  }
+  // My Account insight (spec §1) — only for buyer-owned Stories; organizer
+  // brands have their own analytics surface. Reached exactly once per
+  // (story, viewer), same as the StorySeen row it rides on, so no throttle
+  // is needed here (see AccountActivityService.THROTTLE_MS).
+  if (story.authorType === 'buyer') {
+    AccountActivityService.record({
+      ownerId: String(story.authorId), actorType: actor.type, actorId: actor.id, kind: 'story_view', targetId: storyId,
+    }).catch((err) => console.error('[account-activity] story_view record failed:', err));
   }
 }
 

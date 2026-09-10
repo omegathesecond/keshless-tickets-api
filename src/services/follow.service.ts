@@ -5,6 +5,7 @@ import { HttpError } from '@utils/httpError.util';
 import { NotificationDispatcher } from '@services/notificationDispatcher.service';
 import { NotificationService } from '@services/notification.service';
 import { assertNotSuspended } from '@utils/socialSuspension.util';
+import { AccountActivityService } from '@services/accountActivity.service';
 
 /** The one public shape for "a person or brand" in a follow list — same
  *  field names for both, so a single list component can render buyer AND
@@ -109,7 +110,16 @@ export class FollowService {
   }
 
   static async unfollow(buyer: IBuyer, targetType: FollowTargetType, targetId: string): Promise<void> {
-    await Follow.deleteOne({ followerType: 'buyer', followerId: buyer._id, targetType, targetId });
+    const { deletedCount } = await Follow.deleteOne({ followerType: 'buyer', followerId: buyer._id, targetType, targetId });
+    // My Account insight (spec §1) — buyer-owned targets only ("organizer"
+    // targets have their own follower-analytics surface, out of scope here).
+    // Only on an actual unfollow (deletedCount>0), never on a no-op
+    // (already-not-following) delete.
+    if (deletedCount > 0 && targetType === 'buyer') {
+      AccountActivityService.record({
+        ownerId: targetId, actorType: 'buyer', actorId: String(buyer._id), kind: 'unfollow',
+      }).catch((err) => console.error('[account-activity] unfollow record failed:', err));
+    }
   }
 
   /**
