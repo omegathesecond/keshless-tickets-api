@@ -234,4 +234,44 @@ describe('feed.service getFeed', () => {
     expect(eventSlide?.['ticketing']).toBe('carrot');
     expect(eventSlide?.['externalTicketUrl']).toBeNull();
   });
+
+  // Home feed follow-up: "do not use a fixed feed position for Vote cards" /
+  // "vary their position whenever the feed is refreshed". A bare event (no
+  // lineup/outfit) still gets the always-on attending_with/busy questions
+  // (see vote.service.test.ts), so it's eligible for a Vote feed card the
+  // moment it's published within the 7-day activation window.
+  async function seedVoteEligibleEvent() {
+    const now = Date.now();
+    const startTime = new Date(now + 2 * 86400000);
+    return Event.create({
+      vendorId: new mongoose.Types.ObjectId(), name: 'Vote Event', venue: 'V',
+      eventDate: startTime, startTime, endTime: new Date(startTime.getTime() + 3 * 3600000),
+      status: EventStatus.PUBLISHED, publishedAt: new Date(now - 86400000),
+      ticketTypes: [{ name: 'GA', price: 100, quantity: 50 }],
+    });
+  }
+
+  it('varies the Vote card slot across fresh feed loads instead of a fixed position', async () => {
+    for (let i = 0; i < 12; i++) await seedReadyUpdate('u' + i);
+    await seedVoteEligibleEvent();
+
+    const positions = new Set<number>();
+    for (let i = 0; i < 25; i++) {
+      const { items } = await getFeed({ tab: 'for-you', limit: 11 });
+      const idx = items.findIndex((it) => it.type === 'vote');
+      expect(idx).toBeGreaterThanOrEqual(0);
+      positions.add(idx);
+    }
+    expect(positions.size).toBeGreaterThan(1);
+  });
+
+  it('never puts the Vote card in the very first slot of a fresh feed load', async () => {
+    for (let i = 0; i < 12; i++) await seedReadyUpdate('u' + i);
+    await seedVoteEligibleEvent();
+
+    for (let i = 0; i < 15; i++) {
+      const { items } = await getFeed({ tab: 'for-you', limit: 11 });
+      expect(items[0]?.type).not.toBe('vote');
+    }
+  });
 });

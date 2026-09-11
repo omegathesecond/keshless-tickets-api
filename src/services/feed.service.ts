@@ -40,7 +40,45 @@ function encode(c: Cursor): string { return Buffer.from(JSON.stringify(c)).toStr
 // its empty event bucket makes this pattern fall through to updates/votes.
 // The vote bucket is itself only ever populated for 'for-you'/'following'
 // (see getFeed), so it's a no-op dry slot on the 'events' tab.
-const PATTERN: Array<'u' | 'e' | 'v'> = ['u', 'u', 'u', 'e', 'u', 'u', 'e', 'u', 'u', 'u', 'v'];
+//
+// The window's slot ORDER is re-shuffled every time one is generated (not a
+// fixed constant) — the Home feed follow-up spec: "do not use a fixed feed
+// position for Vote cards" / "vary their position whenever the feed is
+// refreshed". Each getFeed() call builds its pattern buffer from scratch, so
+// a fresh load/refresh (no cursor) always re-randomizes from slot 0.
+function shuffledWindow(): Array<'u' | 'e' | 'v'> {
+  const tokens: Array<'u' | 'e' | 'v'> = ['u', 'u', 'u', 'u', 'u', 'u', 'u', 'u', 'e', 'e', 'v'];
+  for (let i = tokens.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = tokens[i]!;
+    tokens[i] = tokens[j]!;
+    tokens[j] = tmp;
+  }
+  return tokens;
+}
+
+/**
+ * Appends one freshly-shuffled window to the interleave pattern buffer, with
+ * two guards so "continue displaying normal posts before and after each Vote
+ * card" still holds despite the randomness: (1) never let a 'v' land right
+ * after the previous window's trailing 'v' and (2) on a session's very first
+ * window, never put 'v' in slot 0 — the literal top of a fresh feed load
+ * ("do not always display the Vote card at the top of the Home feed").
+ */
+function appendWindow(pattern: Array<'u' | 'e' | 'v'>, isFreshLoad: boolean): void {
+  const win = shuffledWindow();
+  const prevWasVote = pattern.length > 0 && pattern[pattern.length - 1] === 'v';
+  const isFirstWindow = pattern.length === 0;
+  if ((prevWasVote || (isFirstWindow && isFreshLoad)) && win[0] === 'v') {
+    const swapIdx = win.findIndex((t, idx) => idx > 0 && t !== 'v');
+    if (swapIdx > 0) {
+      const tmp = win[0]!;
+      win[0] = win[swapIdx]!;
+      win[swapIdx] = tmp;
+    }
+  }
+  pattern.push(...win);
+}
 
 /**
  * Up to `limit` events whose Vote is currently open, soonest-closing first —
@@ -216,7 +254,7 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
   // (accumulated below, same mechanism as for-you's `s`); a small over-fetch
   // (2x the pattern's per-page budget) covers ranking + any candidate whose
   // window closed between the shortlist query and getVoteFeedCard.
-  let voteSlides: FeedSlide[] = [];
+  const voteSlides: FeedSlide[] = [];
   if (opts.tab === 'for-you' || opts.tab === 'following') {
     const voteBudget = Math.max(1, Math.ceil(limit / 11));
     const candidates = await rankVoteCandidates(await voteCandidateEvents(voteBudget * 2, cur.v ?? []), opts.actor);
@@ -227,12 +265,15 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
     }
   }
 
-  // ---- interleave by PATTERN, dropping dry slots ----
+  // ---- interleave by a freshly-shuffled pattern, dropping dry slots ----
   const q = { u: updateSlides, e: eventSlides, v: voteSlides };
   const items: FeedSlide[] = [];
+  const pattern: Array<'u' | 'e' | 'v'> = [];
+  const isFreshLoad = !opts.cursor;
   let pi = 0;
   while (items.length < limit && (q.u.length || q.e.length || q.v.length)) {
-    const slot = PATTERN[pi % PATTERN.length] as 'u' | 'e' | 'v';
+    if (pi >= pattern.length) appendWindow(pattern, isFreshLoad);
+    const slot = pattern[pi]!;
     pi++;
     const bucket = q[slot];
     if (bucket.length) { items.push(bucket.shift()!); continue; }
