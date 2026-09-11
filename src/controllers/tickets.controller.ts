@@ -880,7 +880,7 @@ export class TicketsController {
       // work during the changeover. The spread is why TypeScript cannot see a
       // shape change here, which is why the cart is built explicitly.
       const { items, ticketTypeId, quantity, ...rest } = value as {
-        items?: Array<{ ticketTypeId: string; quantity: number }>;
+        items?: Array<{ ticketTypeId: string; quantity: number; recipients?: Array<{ name?: string; phone?: string; email?: string }> }>;
         ticketTypeId?: string;
         quantity?: number;
       } & Record<string, unknown>;

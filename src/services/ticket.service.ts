@@ -45,8 +45,13 @@ export interface SellTicketsParams {
    * that call hands back the tier. Asking callers for the snapshot too would
    * make each of them load the event for data we fetch anyway, and let a
    * stale snapshot disagree with the tier we actually validated.
+   *
+   * `recipients` is optional and sparse: entry `i` names ticket `i` minted for
+   * this line, in order, and any line shorter than `quantity` (or omitted
+   * altogether) leaves the remaining tickets carrying the sale's own buyer
+   * details, exactly as before this field existed.
    */
-  lines: Array<{ ticketTypeId: string; quantity: number }>;
+  lines: Array<{ ticketTypeId: string; quantity: number; recipients?: Array<{ name?: string; phone?: string; email?: string }> }>;
   customerName?: string;
   customerPhone?: string;
   // Buyer identity (buyer-authed purchase paths only — VENDOR/POS sales
@@ -452,7 +457,12 @@ export class TicketService {
       // which enforces the cap against the cart TOTAL before we get here, and
       // the direct callers (POS, reseller) are single-line, where the two are
       // the same number.
-      const resolvedLines: Array<{ ticketTypeId: string; ticketType: ITicketType; quantity: number }> = [];
+      const resolvedLines: Array<{
+        ticketTypeId: string;
+        ticketType: ITicketType;
+        quantity: number;
+        recipients?: Array<{ name?: string; phone?: string; email?: string }>;
+      }> = [];
       for (const line of lines) {
         const availabilityCheck = await EventService.checkTicketAvailability(
           eventId,
@@ -468,6 +478,7 @@ export class TicketService {
           ticketTypeId: line.ticketTypeId,
           ticketType: availabilityCheck.ticketTypeData!,
           quantity: line.quantity,
+          recipients: line.recipients,
         });
       }
 
@@ -558,18 +569,23 @@ export class TicketService {
       // Create tickets — one inner pass per cart line, so every ticket carries
       // ITS OWN tier's name and price.
       const tickets: ITicket[] = [];
+      // Flatten to one entry per ticket, pairing each with its own recipient
+      // (absent entries fall back to the sale's buyer details).
       const flattened = resolvedLines.flatMap((line) =>
-        Array.from({ length: line.quantity }, () => line.ticketType)
+        Array.from({ length: line.quantity }, (_, i) => ({
+          tier: line.ticketType,
+          recipient: line.recipients?.[i],
+        }))
       );
-      for (const tier of flattened) {
+      for (const entry of flattened) {
         const ticket = this.buildTicket({
           eventId,
           vendorId,
-          ticketType: tier.name,
-          price: tier.price,
-          customerName,
-          customerPhone,
-          customerEmail,
+          ticketType: entry.tier.name,
+          price: entry.tier.price,
+          customerName: entry.recipient?.name ?? customerName,
+          customerPhone: entry.recipient?.phone ?? customerPhone,
+          customerEmail: entry.recipient?.email ?? customerEmail,
           buyerId,
           currency: displayCurrency,
         });
@@ -585,17 +601,18 @@ export class TicketService {
               session.endSession();
             }
             // Retry ALL tickets without a session — same per-line flattening,
-            // or this fallback would silently mint the wrong tiers.
+            // or this fallback would silently mint the wrong tiers (and drop
+            // every recipient).
             const ticketsWithoutSession: ITicket[] = [];
-            for (const retryTier of flattened) {
+            for (const retryEntry of flattened) {
               const t = this.buildTicket({
                 eventId,
                 vendorId,
-                ticketType: retryTier.name,
-                price: retryTier.price,
-                customerName,
-                customerPhone,
-                customerEmail,
+                ticketType: retryEntry.tier.name,
+                price: retryEntry.tier.price,
+                customerName: retryEntry.recipient?.name ?? customerName,
+                customerPhone: retryEntry.recipient?.phone ?? customerPhone,
+                customerEmail: retryEntry.recipient?.email ?? customerEmail,
                 buyerId,
                 currency: displayCurrency,
               });

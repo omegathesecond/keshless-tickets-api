@@ -433,6 +433,23 @@ export const sellTicketSchema = Joi.object({
     .items(Joi.object({
       ticketTypeId: Joi.string().required().trim(),
       quantity: Joi.number().required().min(1).max(100),
+      // Optional, sparse, applied in order to this line's tickets. Shorter than
+      // quantity is fine — the rest fall back to the sale's buyer details.
+      recipients: Joi.array()
+        .items(Joi.object({
+          name: Joi.string().trim().max(120).optional(),
+          phone: Joi.string().trim().max(32).optional(),
+          email: Joi.string().trim().email().max(254).optional(),
+        }))
+        .optional()
+        .max(100),
+    }).custom((value, helpers) => {
+      if (Array.isArray(value.recipients) && value.recipients.length > value.quantity) {
+        return helpers.error('any.invalid');
+      }
+      return value;
+    }).messages({
+      'any.invalid': 'Cannot supply more recipients than the quantity for a ticket type',
     }))
     .min(1)
     .max(20)
