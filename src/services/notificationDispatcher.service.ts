@@ -42,6 +42,16 @@ export const PREF_BY_TYPE: Record<NotificationType, keyof NotificationPrefs> = {
   plan_visibility_changed: 'social',
   plan_arrangement_updated: 'social',
   plan_cancelled: 'social',
+  // Vote notifications (opened/reminder/tag request/tag response) bypass this
+  // buyer dispatcher for the tag flows (written directly via
+  // NotificationService.create from vote.service, same as meetup/enquiry
+  // above) but DO go through here for vote_opened/vote_reminder fan-out
+  // (@services/voteNotification.service). 'social' is the closest existing
+  // pref bucket for all four; kept for Record<NotificationType,…> exhaustiveness.
+  vote_opened: 'social',
+  vote_reminder: 'social',
+  vote_tag_request: 'social',
+  vote_tag_response: 'social',
 };
 
 const CHUNK = 50;

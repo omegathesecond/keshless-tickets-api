@@ -6,6 +6,7 @@ import { BookingService } from '@services/transport/booking.service';
 import { MenuOrderService } from '@services/menuOrder.service';
 import { ReconciliationService } from '@services/reconciliation.service';
 import { AccountActivityDigestService } from '@services/accountActivityDigest.service';
+import { VoteNotificationService } from '@services/voteNotification.service';
 
 // Start the reservation expiry sweep
 const RESERVATION_SWEEP_MS = 60_000;
@@ -86,6 +87,11 @@ const CASHLESS_RECONCILE_MS = 900_000;
 // than one push per sweep tick.
 const ACCOUNT_ACTIVITY_DIGEST_MS = 1_800_000;
 
+// Vote: materialize questions once a Vote window opens + dispatch the
+// spec §8 one-time "opened" notification and the one optional "closing soon"
+// reminder. Same cadence as the event reminder sweep.
+const VOTE_SWEEP_MS = 600_000;
+
 /**
  * Registers all periodic background sweeps (reservation expiry, card-sale
  * reconciliation, event reminders, stuck-update reconciliation) with their
@@ -153,6 +159,10 @@ export function startBackgroundTasks(): NodeJS.Timeout[] {
   handles.push(setInterval(() => {
     AccountActivityDigestService.sweep().catch(err => console.error('[account-activity-digest] error', err));
   }, ACCOUNT_ACTIVITY_DIGEST_MS));
+
+  handles.push(setInterval(() => {
+    VoteNotificationService.sweep().catch((err) => console.error('[vote-sweep] error', err));
+  }, VOTE_SWEEP_MS));
 
   return handles;
 }

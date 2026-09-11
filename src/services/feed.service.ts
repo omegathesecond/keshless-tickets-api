@@ -4,29 +4,106 @@ import { Event } from '@models/event.model';
 import { Vendor } from '@models/vendor.model';
 import { Buyer } from '@models/buyer.model';
 import { Follow } from '@models/follow.model';
+import { EventReaction } from '@models/eventReaction.model';
+import { Community } from '@models/community.model';
+import { Membership } from '@models/membership.model';
+import { Ticket } from '@models/ticket.model';
+import { TicketStatus } from '@interfaces/ticket.interface';
 import { EventStatus } from '@interfaces/event.interface';
 import { notEndedFilter } from '@utils/eventVisibility.util';
 import type { SocialActor } from '@utils/socialActor.util';
 import { buildEventCardFields } from '@utils/eventCard.util';
+import { getVoteFeedCard } from '@services/vote.service';
 
 export type FeedSlide =
   | { type: 'update'; id: string; sortAt: string; [k: string]: any }
-  | { type: 'event'; id: string; sortAt: string; [k: string]: any };
+  | { type: 'event'; id: string; sortAt: string; [k: string]: any }
+  | { type: 'vote'; id: string; sortAt: string; [k: string]: any };
 
 interface FeedOpts { tab: 'for-you' | 'following' | 'events'; cursor?: string; actor?: SocialActor; limit?: number; category?: string; }
 /** `e` is the $skip-based event cursor. `s` ("seen") covers update ids already
  *  served THIS random walk — every tab with update slides ('for-you' and
  *  'following') now samples them via $sample, so a later page's $nin
- *  exclusion is what keeps it from ever repeating one. */
-interface Cursor { e?: number; s?: string[]; }
+ *  exclusion is what keeps it from ever repeating one. `v` ("vote-seen") is
+ *  the Home feed spec's "don't repeatedly show the same Vote during one
+ *  browsing session" (§4) — event ids whose Vote card has already been
+ *  served THIS session, across every tab that shows one. */
+interface Cursor { e?: number; s?: string[]; v?: string[]; }
 
 function decode(cursor?: string): Cursor { if (!cursor) return {}; try { return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')); } catch { return {}; } }
 function encode(c: Cursor): string { return Buffer.from(JSON.stringify(c)).toString('base64url'); }
 
-// per-window slot pattern (7): u u u e u u e. Only the 'following' blend and
-// the 'events' tab surface event slots; 'for-you' (Discover) is posts-only, so
-// its empty event bucket makes this pattern fall through to all updates.
-const PATTERN: Array<'u' | 'e'> = ['u', 'u', 'u', 'e', 'u', 'u', 'e'];
+// per-window slot pattern (11): mostly posts, an event every ~4th slot, and a
+// Vote card once every 11 — "mix Vote cards naturally... without
+// overwhelming the feed" (spec §4). Only the 'following' blend and the
+// 'events' tab surface event slots; 'for-you' (Discover) is posts-only, so
+// its empty event bucket makes this pattern fall through to updates/votes.
+// The vote bucket is itself only ever populated for 'for-you'/'following'
+// (see getFeed), so it's a no-op dry slot on the 'events' tab.
+const PATTERN: Array<'u' | 'e' | 'v'> = ['u', 'u', 'u', 'e', 'u', 'u', 'e', 'u', 'u', 'u', 'v'];
+
+/**
+ * Up to `limit` events whose Vote is currently open, soonest-closing first —
+ * a Mongo-provable equivalent of "window has opened and not closed" (see
+ * @utils/voteWindow.util's doc comment: for ANY published event, that holds
+ * exactly when `now < startTime <= now + 7d`), so no per-row window
+ * computation is needed just to shortlist candidates.
+ */
+async function voteCandidateEvents(limit: number, excludeEventIds: string[]): Promise<any[]> {
+  const now = new Date();
+  const sevenDaysOut = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const query: any = { status: EventStatus.PUBLISHED, publishedAt: { $ne: null }, startTime: { $gt: now, $lte: sevenDaysOut } };
+  if (excludeEventIds.length) query._id = { $nin: excludeEventIds.map((id) => new Types.ObjectId(id)) };
+  return Event.find(query).sort({ startTime: 1 }).limit(limit).lean();
+}
+
+/**
+ * "Prioritize Votes for events the user follows, saved, joined, purchased
+ * tickets for or has previously engaged with" (spec §4). Scores each
+ * candidate by how many of those signals apply and stable-sorts by score
+ * (ties keep the soonest-closing order from voteCandidateEvents). A no-op for
+ * an anonymous viewer — there's no engagement history to rank by.
+ */
+async function rankVoteCandidates(events: any[], actor?: SocialActor): Promise<any[]> {
+  if (!actor || events.length === 0) return events;
+  const eventIds = events.map((e) => e._id);
+
+  const [reactions, follows, memberships, ticketPhones] = await Promise.all([
+    EventReaction.find({ eventId: { $in: eventIds }, actorType: actor.type, buyerId: actor.id }).select('eventId').lean(),
+    Follow.find({ followerType: actor.type === 'vendor' ? 'vendor' : 'buyer', followerId: actor.id, targetType: 'organizer' }).select('targetId').lean(),
+    actor.type === 'buyer'
+      ? Community.find({ eventId: { $in: eventIds } }).select('eventId').lean().then(async (communities) => {
+          if (communities.length === 0) return [] as string[];
+          const joined = await Membership.find({ communityId: { $in: communities.map((c: any) => c._id) }, buyerId: actor.id }).select('communityId').lean();
+          const joinedCommunityIds = new Set(joined.map((m: any) => String(m.communityId)));
+          return communities.filter((c: any) => joinedCommunityIds.has(String(c._id))).map((c: any) => String(c.eventId));
+        })
+      : Promise.resolve([] as string[]),
+    actor.type === 'buyer' ? Buyer.findById(actor.id).select('phone').lean().then((b: any) => (b?.phone ? [b.phone] : [])) : Promise.resolve([] as string[]),
+  ]);
+
+  const engagedEventIds = new Set(reactions.map((r: any) => String(r.eventId)));
+  const followedOrgIds = new Set(follows.map((f: any) => String(f.targetId)));
+  const joinedEventIds = new Set(memberships as string[]);
+  const ticketedEventIds = new Set(
+    ticketPhones.length
+      ? (await Ticket.find({ eventId: { $in: eventIds }, customerPhone: { $in: ticketPhones }, status: { $in: [TicketStatus.SOLD, TicketStatus.CHECKED_IN] } }).select('eventId').lean()).map(
+          (t: any) => String(t.eventId)
+        )
+      : []
+  );
+
+  const score = (e: any): number => {
+    const id = String(e._id);
+    let s = 0;
+    if (engagedEventIds.has(id)) s++;
+    if (e.vendorId && followedOrgIds.has(String(e.vendorId))) s++;
+    if (joinedEventIds.has(id)) s++;
+    if (ticketedEventIds.has(id)) s++;
+    return s;
+  };
+  return [...events].sort((a, b) => score(b) - score(a)); // stable: ties keep incoming (soonest-closing) order
+}
 
 export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nextCursor: string | null }> {
   const limit = Math.min(opts.limit ?? 12, 30);
@@ -133,17 +210,34 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
     };
   });
 
+  // Vote cards (spec §4) — only the two personal-scroll tabs; 'events' is
+  // dedicated event browsing and gets none (see PATTERN's doc comment).
+  // "Don't repeatedly show the same Vote during one session" is `cur.v`
+  // (accumulated below, same mechanism as for-you's `s`); a small over-fetch
+  // (2x the pattern's per-page budget) covers ranking + any candidate whose
+  // window closed between the shortlist query and getVoteFeedCard.
+  let voteSlides: FeedSlide[] = [];
+  if (opts.tab === 'for-you' || opts.tab === 'following') {
+    const voteBudget = Math.max(1, Math.ceil(limit / 11));
+    const candidates = await rankVoteCandidates(await voteCandidateEvents(voteBudget * 2, cur.v ?? []), opts.actor);
+    for (const candidate of candidates) {
+      if (voteSlides.length >= voteBudget) break;
+      const card = await getVoteFeedCard(candidate, opts.actor ?? null);
+      if (card) voteSlides.push({ type: 'vote', id: card.eventId, sortAt: new Date(candidate.startTime).toISOString(), ...card });
+    }
+  }
+
   // ---- interleave by PATTERN, dropping dry slots ----
-  const q = { u: updateSlides, e: eventSlides };
+  const q = { u: updateSlides, e: eventSlides, v: voteSlides };
   const items: FeedSlide[] = [];
   let pi = 0;
-  while (items.length < limit && (q.u.length || q.e.length)) {
-    const slot = PATTERN[pi % PATTERN.length] as 'u' | 'e';
+  while (items.length < limit && (q.u.length || q.e.length || q.v.length)) {
+    const slot = PATTERN[pi % PATTERN.length] as 'u' | 'e' | 'v';
     pi++;
     const bucket = q[slot];
     if (bucket.length) { items.push(bucket.shift()!); continue; }
-    // slot dry: fall back to whichever has items (u > e), else break out of this pass
-    const fallback = q.u.length ? q.u : q.e.length ? q.e : null;
+    // slot dry: fall back to whichever has items (u > e > v), else break out of this pass
+    const fallback = q.u.length ? q.u : q.e.length ? q.e : q.v.length ? q.v : null;
     if (!fallback) break;
     items.push(fallback.shift()!);
   }
@@ -160,6 +254,10 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
   if (merged.length) next.s = merged;
   if (consumedEventCount) next.e = eventSkip + consumedEventCount;
   else if (cur.e) next.e = cur.e;
+
+  const consumedVoteEventIds = items.filter((i) => i.type === 'vote').map((i) => i.id);
+  const mergedVoteSeen = [...(cur.v ?? []), ...consumedVoteEventIds];
+  if (mergedVoteSeen.length) next.v = mergedVoteSeen;
 
   const anyMore = items.length >= limit; // conservative: only advertise more if we filled a page
   return { items, nextCursor: anyMore ? encode(next) : null };

@@ -119,6 +119,16 @@ export interface IEvent extends Document {
   galleryImages?: string[];
   qrCodeUrl?: string;
 
+  // Vote feature inputs (see @services/vote.service). Absent/empty means the
+  // corresponding Vote question is never shown — nothing is fabricated when
+  // an organizer hasn't supplied this information.
+  // Performer/artist names for the "Which artist will perform best?" question.
+  lineup?: string[];
+  // Candidate outfit/dress-code themes for the "Which outfit theme should
+  // attendees wear?" question — a poll among organizer-supplied options, not
+  // a single fixed dress code.
+  outfitThemeOptions?: string[];
+
   // Publishing
   publishedAt?: Date;
   cancelledAt?: Date;

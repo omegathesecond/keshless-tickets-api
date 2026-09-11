@@ -239,6 +239,18 @@ const eventSchema = new Schema<IEvent>({
     trim: true
   },
 
+  // Vote feature inputs — see IEvent.lineup / outfitThemeOptions. No
+  // schema default: absent means the Vote question they gate is skipped
+  // entirely, never rendered with fabricated options.
+  lineup: {
+    type: [String],
+    default: undefined
+  },
+  outfitThemeOptions: {
+    type: [String],
+    default: undefined
+  },
+
   // Publishing
   publishedAt: {
     type: Date

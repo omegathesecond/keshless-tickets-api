@@ -22,7 +22,11 @@ export type NotificationType =
   | 'plan_message'
   | 'plan_visibility_changed'
   | 'plan_arrangement_updated'
-  | 'plan_cancelled';
+  | 'plan_cancelled'
+  | 'vote_opened'
+  | 'vote_reminder'
+  | 'vote_tag_request'
+  | 'vote_tag_response';
 
 export type NotificationRecipientType = 'buyer' | 'vendor';
 
@@ -69,6 +73,10 @@ const notificationSchema = new Schema<INotification>(
         'plan_visibility_changed',
         'plan_arrangement_updated',
         'plan_cancelled',
+        'vote_opened',
+        'vote_reminder',
+        'vote_tag_request',
+        'vote_tag_response',
       ],
       required: true,
     },
@@ -102,6 +110,20 @@ notificationSchema.index({ recipientType: 1, recipientId: 1, readAt: 1 });
 notificationSchema.index(
   { recipientId: 1, type: 1, 'data.eventId': 1, 'data.kind': 1 },
   { unique: true, partialFilterExpression: { type: 'event_reminder' } }
+);
+
+// Vote notification limits (spec §8): "one notification when the Vote opens"
+// and "a maximum of one optional reminder" — both PER (recipient, event),
+// never per question. Two separate partial indexes (not one $in-based
+// filter — partialFilterExpression doesn't support $in) with explicit names
+// so their identical key shape doesn't collide with Mongoose's auto-naming.
+notificationSchema.index(
+  { recipientId: 1, type: 1, 'data.eventId': 1 },
+  { unique: true, partialFilterExpression: { type: 'vote_opened' }, name: 'vote_opened_dedupe' }
+);
+notificationSchema.index(
+  { recipientId: 1, type: 1, 'data.eventId': 1 },
+  { unique: true, partialFilterExpression: { type: 'vote_reminder' }, name: 'vote_reminder_dedupe' }
 );
 
 export const Notification = model<INotification>('Notification', notificationSchema);
