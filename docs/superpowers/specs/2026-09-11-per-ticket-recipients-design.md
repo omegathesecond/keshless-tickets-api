@@ -81,7 +81,9 @@ the same treatment `buildTicket` already applies.
 Vendor-ownership checked, `SELL_TICKETS`. Persists onto the ticket so a later
 resend needs no retyping.
 
-Refuses with 409 when `ticket.status === 'used'`: silently moving an
+Refuses with 409 when `ticket.status === TicketStatus.CHECKED_IN`
+(the enum has no `used` member — values are available | sold | checked_in |
+refunded | cancelled): silently moving an
 already-scanned ticket to a new name is how gate disputes start. The UI states
 the reason rather than hiding the row.
 
