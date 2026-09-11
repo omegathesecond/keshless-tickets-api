@@ -57,6 +57,13 @@ export const PREF_BY_TYPE: Record<NotificationType, keyof NotificationPrefs> = {
   if_i_go_posted: 'social',
   if_i_go_response: 'social',
   if_i_go_status_changed: 'social',
+  // My Weekend (spec §17/§18) — private invites/offers/requests route
+  // through 'social' (same bucket as meetups/plans/if-i-go); the Friday
+  // nudge routes through 'reminders' (same bucket as event_reminder), which
+  // is also the toggle spec §18's "disable weekly reminders" setting reuses.
+  weekend_request_received: 'social',
+  weekend_request_responded: 'social',
+  weekend_reminder: 'reminders',
 };
 
 const CHUNK = 50;

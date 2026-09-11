@@ -7,6 +7,8 @@ import { MenuOrderService } from '@services/menuOrder.service';
 import { ReconciliationService } from '@services/reconciliation.service';
 import { AccountActivityDigestService } from '@services/accountActivityDigest.service';
 import { VoteNotificationService } from '@services/voteNotification.service';
+import { WeekendReminderService } from '@services/weekendReminder.service';
+import { WeekendService } from '@services/weekend.service';
 
 // Start the reservation expiry sweep
 const RESERVATION_SWEEP_MS = 60_000;
@@ -92,6 +94,19 @@ const ACCOUNT_ACTIVITY_DIGEST_MS = 1_800_000;
 // reminder. Same cadence as the event reminder sweep.
 const VOTE_SWEEP_MS = 600_000;
 
+// My Weekend (spec §18): weekly "what are you doing this weekend?" nudge —
+// self-gates on UTC Friday inside the sweep itself (see
+// WeekendReminderService's doc comment on why: no cron scheduler exists
+// here). Same cadence as the event/vote reminder sweeps.
+const WEEKEND_REMINDER_SWEEP_MS = 600_000;
+
+// My Weekend (spec §19): drop statuses linked to an event that got
+// cancelled after the status was posted — the only expiry case that isn't
+// already covered by a plain `activeUntil` comparison (see
+// WeekendService.sweepCancelledEventLinks). 15 minutes: not urgent, cheap
+// query, no user-facing latency requirement.
+const WEEKEND_CANCELLED_EVENT_SWEEP_MS = 900_000;
+
 /**
  * Registers all periodic background sweeps (reservation expiry, card-sale
  * reconciliation, event reminders, stuck-update reconciliation) with their
@@ -163,6 +178,14 @@ export function startBackgroundTasks(): NodeJS.Timeout[] {
   handles.push(setInterval(() => {
     VoteNotificationService.sweep().catch((err) => console.error('[vote-sweep] error', err));
   }, VOTE_SWEEP_MS));
+
+  handles.push(setInterval(() => {
+    WeekendReminderService.sweep().catch((err) => console.error('[weekend-reminder-sweep] error', err));
+  }, WEEKEND_REMINDER_SWEEP_MS));
+
+  handles.push(setInterval(() => {
+    WeekendService.sweepCancelledEventLinks().catch((err) => console.error('[weekend-cancelled-event-sweep] error', err));
+  }, WEEKEND_CANCELLED_EVENT_SWEEP_MS));
 
   return handles;
 }
