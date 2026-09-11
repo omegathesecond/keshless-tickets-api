@@ -360,6 +360,14 @@ export interface StoryItemDto {
   id: string;
   mediaUrl: string;
   kind: StoryKind;
+  /** For 'if_i_go' only, and only when `mediaUrl` is non-empty: whether that
+   *  attached media is a photo or a video — `kind` itself stays 'if_i_go'
+   *  either way (unlike a plain Story, where `kind` IS the media type), so
+   *  without this the client has no way to know which element to render for
+   *  a non-empty mediaUrl. Undefined for every other case (plain 'image'/
+   *  'video' kinds already answer this via `kind`; a medialess 'if_i_go'
+   *  card has no media element to pick between). */
+  mediaKind?: 'image' | 'video';
   durationSec: number;
   createdAt: Date;
   /** 'if_i_go' only — optional caption under the question (spec §1.2). */
@@ -517,6 +525,7 @@ export async function listForViewer(actor: SocialActor): Promise<StoryGroupDto[]
       id: s.id,
       mediaUrl,
       kind: s.kind,
+      ...(s.kind === 'if_i_go' && visualKind ? { mediaKind: visualKind } : {}),
       durationSec: playbackDurationSec(s),
       createdAt: s.createdAt,
       viewerHasLiked: likedSet.has(String(s._id)),
