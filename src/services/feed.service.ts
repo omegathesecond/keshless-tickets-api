@@ -14,11 +14,13 @@ import { notEndedFilter } from '@utils/eventVisibility.util';
 import type { SocialActor } from '@utils/socialActor.util';
 import { buildEventCardFields } from '@utils/eventCard.util';
 import { getVoteFeedCard } from '@services/vote.service';
+import { EventPlanService } from '@services/eventPlan.service';
 
 export type FeedSlide =
   | { type: 'update'; id: string; sortAt: string; [k: string]: any }
   | { type: 'event'; id: string; sortAt: string; [k: string]: any }
-  | { type: 'vote'; id: string; sortAt: string; [k: string]: any };
+  | { type: 'vote'; id: string; sortAt: string; [k: string]: any }
+  | { type: 'plan'; id: string; sortAt: string; [k: string]: any };
 
 interface FeedOpts { tab: 'for-you' | 'following' | 'events'; cursor?: string; actor?: SocialActor; limit?: number; category?: string; }
 /** `e` is the $skip-based event cursor. `s` ("seen") covers update ids already
@@ -27,27 +29,34 @@ interface FeedOpts { tab: 'for-you' | 'following' | 'events'; cursor?: string; a
  *  exclusion is what keeps it from ever repeating one. `v` ("vote-seen") is
  *  the Home feed spec's "don't repeatedly show the same Vote during one
  *  browsing session" (§4) — event ids whose Vote card has already been
- *  served THIS session, across every tab that shows one. */
-interface Cursor { e?: number; s?: string[]; v?: string[]; }
+ *  served THIS session, across every tab that shows one. `p` ("plan-seen")
+ *  is the same "don't repeat" treatment for Event Plan cards. */
+interface Cursor { e?: number; s?: string[]; v?: string[]; p?: string[]; }
 
 function decode(cursor?: string): Cursor { if (!cursor) return {}; try { return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')); } catch { return {}; } }
 function encode(c: Cursor): string { return Buffer.from(JSON.stringify(c)).toString('base64url'); }
 
-// per-window slot pattern (11): mostly posts, an event every ~4th slot, and a
-// Vote card once every 11 — "mix Vote cards naturally... without
-// overwhelming the feed" (spec §4). Only the 'following' blend and the
-// 'events' tab surface event slots; 'for-you' (Discover) is posts-only, so
-// its empty event bucket makes this pattern fall through to updates/votes.
-// The vote bucket is itself only ever populated for 'for-you'/'following'
-// (see getFeed), so it's a no-op dry slot on the 'events' tab.
+type Slot = 'u' | 'e' | 'v' | 'p';
+
+// per-window slot pattern (11): mostly posts, an event every ~4th slot, a
+// Vote card once every 11, and an Event Plan card once every 11 — "mix ...
+// cards naturally... without overwhelming the feed" (spec §4, extended to
+// Event Plan cards by the Home-feed-discoverability follow-up). Only the
+// 'following' blend and the 'events' tab surface event slots; 'for-you'
+// (Discover) is posts-only, so its empty event bucket makes this pattern
+// fall through to updates/votes/plans. The vote and plan buckets are
+// themselves only ever populated for 'for-you'/'following' (see getFeed),
+// so they're no-op dry slots on the 'events' tab.
 //
 // The window's slot ORDER is re-shuffled every time one is generated (not a
 // fixed constant) — the Home feed follow-up spec: "do not use a fixed feed
 // position for Vote cards" / "vary their position whenever the feed is
-// refreshed". Each getFeed() call builds its pattern buffer from scratch, so
-// a fresh load/refresh (no cursor) always re-randomizes from slot 0.
-function shuffledWindow(): Array<'u' | 'e' | 'v'> {
-  const tokens: Array<'u' | 'e' | 'v'> = ['u', 'u', 'u', 'u', 'u', 'u', 'u', 'u', 'e', 'e', 'v'];
+// refreshed" (extended to Event Plan cards for the same reason: neither
+// should camp on a fixed position). Each getFeed() call builds its pattern
+// buffer from scratch, so a fresh load/refresh (no cursor) always
+// re-randomizes from slot 0.
+function shuffledWindow(): Slot[] {
+  const tokens: Slot[] = ['u', 'u', 'u', 'u', 'u', 'u', 'u', 'e', 'e', 'v', 'p'];
   for (let i = tokens.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     const tmp = tokens[i]!;
@@ -59,18 +68,21 @@ function shuffledWindow(): Array<'u' | 'e' | 'v'> {
 
 /**
  * Appends one freshly-shuffled window to the interleave pattern buffer, with
- * two guards so "continue displaying normal posts before and after each Vote
- * card" still holds despite the randomness: (1) never let a 'v' land right
- * after the previous window's trailing 'v' and (2) on a session's very first
- * window, never put 'v' in slot 0 — the literal top of a fresh feed load
- * ("do not always display the Vote card at the top of the Home feed").
+ * guards so "continue displaying normal posts before and after each
+ * Vote/Event Plan card" still holds despite the randomness: (1) never let a
+ * 'v' or 'p' land right after the previous window's trailing slot of the
+ * SAME type and (2) on a session's very first window, never put either in
+ * slot 0 — the literal top of a fresh feed load ("do not always display the
+ * Vote card at the top of the Home feed").
  */
-function appendWindow(pattern: Array<'u' | 'e' | 'v'>, isFreshLoad: boolean): void {
+function appendWindow(pattern: Slot[], isFreshLoad: boolean): void {
   const win = shuffledWindow();
-  const prevWasVote = pattern.length > 0 && pattern[pattern.length - 1] === 'v';
   const isFirstWindow = pattern.length === 0;
-  if ((prevWasVote || (isFirstWindow && isFreshLoad)) && win[0] === 'v') {
-    const swapIdx = win.findIndex((t, idx) => idx > 0 && t !== 'v');
+  const prevTail = pattern[pattern.length - 1];
+  for (const special of ['v', 'p'] as const) {
+    if (win[0] !== special) continue;
+    if (!(prevTail === special || (isFirstWindow && isFreshLoad))) continue;
+    const swapIdx = win.findIndex((t, idx) => idx > 0 && t !== 'v' && t !== 'p');
     if (swapIdx > 0) {
       const tmp = win[0]!;
       win[0] = win[swapIdx]!;
@@ -249,11 +261,12 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
   });
 
   // Vote cards (spec §4) — only the two personal-scroll tabs; 'events' is
-  // dedicated event browsing and gets none (see PATTERN's doc comment).
-  // "Don't repeatedly show the same Vote during one session" is `cur.v`
-  // (accumulated below, same mechanism as for-you's `s`); a small over-fetch
-  // (2x the pattern's per-page budget) covers ranking + any candidate whose
-  // window closed between the shortlist query and getVoteFeedCard.
+  // dedicated event browsing and gets none (see shuffledWindow's doc
+  // comment). "Don't repeatedly show the same Vote during one session" is
+  // `cur.v` (accumulated below, same mechanism as for-you's `s`); a small
+  // over-fetch (2x the pattern's per-page budget) covers ranking + any
+  // candidate whose window closed between the shortlist query and
+  // getVoteFeedCard.
   const voteSlides: FeedSlide[] = [];
   if (opts.tab === 'for-you' || opts.tab === 'following') {
     const voteBudget = Math.max(1, Math.ceil(limit / 11));
@@ -265,20 +278,34 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
     }
   }
 
+  // Event Plan cards (Home-feed-discoverability follow-up to spec §5) —
+  // same two personal-scroll tabs as Vote. getFeedCards is a live
+  // visibility='public'/status='active' query (src/services/eventPlan.service.ts),
+  // so a plan the admin just made private or cancelled is already excluded —
+  // no separate ranking/window-closed race to guard against, unlike Vote.
+  // `cur.p` gives the same "don't repeat this session" treatment as `cur.v`.
+  const planSlides: FeedSlide[] = [];
+  if (opts.tab === 'for-you' || opts.tab === 'following') {
+    const planBudget = Math.max(1, Math.ceil(limit / 11));
+    const viewerBuyerId = opts.actor?.type === 'buyer' ? opts.actor.id : null;
+    const cards = await EventPlanService.getFeedCards(planBudget, cur.p ?? [], viewerBuyerId);
+    for (const card of cards) planSlides.push(card as FeedSlide);
+  }
+
   // ---- interleave by a freshly-shuffled pattern, dropping dry slots ----
-  const q = { u: updateSlides, e: eventSlides, v: voteSlides };
+  const q = { u: updateSlides, e: eventSlides, v: voteSlides, p: planSlides };
   const items: FeedSlide[] = [];
-  const pattern: Array<'u' | 'e' | 'v'> = [];
+  const pattern: Slot[] = [];
   const isFreshLoad = !opts.cursor;
   let pi = 0;
-  while (items.length < limit && (q.u.length || q.e.length || q.v.length)) {
+  while (items.length < limit && (q.u.length || q.e.length || q.v.length || q.p.length)) {
     if (pi >= pattern.length) appendWindow(pattern, isFreshLoad);
     const slot = pattern[pi]!;
     pi++;
     const bucket = q[slot];
     if (bucket.length) { items.push(bucket.shift()!); continue; }
-    // slot dry: fall back to whichever has items (u > e > v), else break out of this pass
-    const fallback = q.u.length ? q.u : q.e.length ? q.e : q.v.length ? q.v : null;
+    // slot dry: fall back to whichever has items (u > e > v > p), else break out of this pass
+    const fallback = q.u.length ? q.u : q.e.length ? q.e : q.v.length ? q.v : q.p.length ? q.p : null;
     if (!fallback) break;
     items.push(fallback.shift()!);
   }
@@ -299,6 +326,10 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
   const consumedVoteEventIds = items.filter((i) => i.type === 'vote').map((i) => i.id);
   const mergedVoteSeen = [...(cur.v ?? []), ...consumedVoteEventIds];
   if (mergedVoteSeen.length) next.v = mergedVoteSeen;
+
+  const consumedPlanIds = items.filter((i) => i.type === 'plan').map((i) => i.id);
+  const mergedPlanSeen = [...(cur.p ?? []), ...consumedPlanIds];
+  if (mergedPlanSeen.length) next.p = mergedPlanSeen;
 
   const anyMore = items.length >= limit; // conservative: only advertise more if we filled a page
   return { items, nextCursor: anyMore ? encode(next) : null };

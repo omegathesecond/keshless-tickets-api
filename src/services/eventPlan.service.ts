@@ -1,3 +1,4 @@
+import { Types } from 'mongoose';
 import { EventPlan, IEventPlan, PlanVisibility, PlanJoinPolicy } from '@models/eventPlan.model';
 import { EventPlanMember, IEventPlanMember, PlanAttendanceStatus } from '@models/eventPlanMember.model';
 import { Buyer, IBuyer } from '@models/buyer.model';
@@ -317,6 +318,94 @@ export class EventPlanService {
     filtered.sort((a, b) => String(b._id).localeCompare(String(a._id)));
     const memberByPlan = new Map(rows.map((r) => [String(r.planId), r]));
     return EventPlanService.toCards(filtered, buyerId, memberByPlan);
+  }
+
+  /**
+   * Home feed "Event Plan" cards (ticket: Public Plans must be discoverable
+   * through the Home feed). A live query over visibility/status — never a
+   * stored "published to feed" flag — so a plan that flips to private or
+   * gets cancelled disappears from the very next feed fetch with no extra
+   * bookkeeping ("remove it immediately"), and a plan flipped from private
+   * to public becomes eligible the same way. `excludeIds` is the feed's
+   * per-session "don't repeat" cursor (mirrors Vote's `v`, feed.service.ts).
+   */
+  static async getFeedCards(limit: number, excludeIds: string[], viewerBuyerId: string | null): Promise<any[]> {
+    if (limit <= 0) return [];
+    const query: any = { visibility: 'public', status: 'active' };
+    if (excludeIds.length) query._id = { $nin: excludeIds.filter((id) => HEX24.test(id)).map((id) => new Types.ObjectId(id)) };
+    const plans = await EventPlan.find(query).sort({ _id: -1 }).limit(limit);
+    if (plans.length === 0) return [];
+
+    const planIds = plans.map((p) => p._id);
+    const eventIds = [...new Set(plans.map((p) => String(p.eventId)))];
+    const adminIds = [...new Set(plans.map((p) => String(p.adminId)))];
+
+    const [events, admins, counts, memberRows, viewerRows] = await Promise.all([
+      Event.find({ _id: { $in: eventIds } }).select('name eventDate venue posterUrl'),
+      Buyer.find({ _id: { $in: adminIds } }).select('name username avatarUrl'),
+      EventPlanMember.aggregate([
+        { $match: { planId: { $in: planIds }, status: 'accepted' } },
+        { $group: { _id: '$planId', count: { $sum: 1 } } },
+      ]),
+      // Small "overlapping avatars" sample (spec: home feed card) — earliest
+      // joiners first, capped per-plan below to avoid over-fetching.
+      EventPlanMember.find({ planId: { $in: planIds }, status: 'accepted' }).sort({ joinedAt: 1 }).select('planId buyerId'),
+      viewerBuyerId
+        ? EventPlanMember.find({ planId: { $in: planIds }, buyerId: viewerBuyerId }).select('planId status')
+        : Promise.resolve([] as IEventPlanMember[]),
+    ]);
+
+    const eventById = new Map(events.map((e: any) => [String(e._id), e]));
+    const adminById = new Map(admins.map((b: any) => [String(b._id), b]));
+    const countByPlan = new Map(counts.map((c: any) => [String(c._id), c.count]));
+    const viewerStatusByPlan = new Map(viewerRows.map((r: any) => [String(r.planId), r.status]));
+
+    const sampleBuyerIdsByPlan = new Map<string, string[]>();
+    for (const row of memberRows as any[]) {
+      const key = String(row.planId);
+      const arr = sampleBuyerIdsByPlan.get(key) ?? [];
+      if (arr.length < 5) arr.push(String(row.buyerId));
+      sampleBuyerIdsByPlan.set(key, arr);
+    }
+    const sampleBuyers = await Buyer.find({ _id: { $in: [...new Set([...sampleBuyerIdsByPlan.values()].flat())] } }).select('avatarUrl');
+    const avatarByBuyer = new Map(sampleBuyers.map((b: any) => [String(b._id), b.avatarUrl ?? null]));
+
+    return plans
+      .map((p) => {
+        // A plan whose event was deleted has nothing to attach to — drop it
+        // rather than surface a broken card.
+        const event = eventById.get(String(p.eventId));
+        if (!event) return null;
+        return {
+          type: 'plan' as const,
+          id: String(p._id),
+          sortAt: p.createdAt.toISOString(),
+          visibility: 'public' as const,
+          name: p.name,
+          description: p.description ?? null,
+          admin: buyerSummary(adminById.get(String(p.adminId)) ?? { _id: p.adminId }),
+          memberCount: countByPlan.get(String(p._id)) ?? 0,
+          memberAvatars: (sampleBuyerIdsByPlan.get(String(p._id)) ?? []).map((id) => avatarByBuyer.get(id) ?? null),
+          meetingPoint: p.meetingPoint ?? null,
+          meetingTime: p.meetingTime ?? null,
+          transport: p.transport
+            ? { method: p.transport.method ?? null, seats: p.transport.seats ?? null, costEstimate: p.transport.costEstimate ?? null }
+            : null,
+          joinPolicy: p.joinPolicy,
+          event: {
+            id: String(event._id),
+            name: event.name,
+            eventDate: event.eventDate,
+            venue: event.venue,
+            posterUrl: event.posterUrl ?? null,
+          },
+          viewer: {
+            isAdmin: viewerBuyerId ? String(p.adminId) === viewerBuyerId : false,
+            memberStatus: viewerBuyerId ? viewerStatusByPlan.get(String(p._id)) ?? null : null,
+          },
+        };
+      })
+      .filter((c): c is NonNullable<typeof c> => c !== null);
   }
 
   // ---------------------------------------------------------------------
