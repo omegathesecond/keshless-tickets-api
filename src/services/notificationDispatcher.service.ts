@@ -29,6 +29,19 @@ export const PREF_BY_TYPE: Record<NotificationType, keyof NotificationPrefs> = {
   // Task 1); 'social' is the closest existing pref bucket, kept only for
   // Record<NotificationType,…> exhaustiveness.
   low_stock: 'social',
+  // Plans With Friends (spec §7/§9/§10) — all routed through the 'social' pref,
+  // same bucket as meetups/follows.
+  plan_invite: 'social',
+  plan_invite_accepted: 'social',
+  plan_invite_declined: 'social',
+  plan_join_request: 'social',
+  plan_join_approved: 'social',
+  plan_join_declined: 'social',
+  plan_member_removed: 'social',
+  plan_message: 'social',
+  plan_visibility_changed: 'social',
+  plan_arrangement_updated: 'social',
+  plan_cancelled: 'social',
 };
 
 const CHUNK = 50;
