@@ -277,6 +277,67 @@ describe('feed.service getFeed', () => {
     }
   });
 
+  // Follow-up regression: the interleave pattern buffer is rebuilt from
+  // scratch on EVERY getFeed() call, including a paginated continuation
+  // (opts.cursor set). Pre-fix, only a fresh load's pattern buffer guarded
+  // slot 0 against opening on a Vote card — a continuation request had no
+  // memory of what the previous page ended on, so if page N's last item
+  // happened to be a Vote card and page N+1's freshly-shuffled pattern
+  // happened to start with one too, two Vote cards would render back-to-back
+  // across the page boundary.
+  //
+  // This is deterministic, not statistical: it drives shuffledWindow()'s
+  // Fisher-Yates via a controlled Math.random() sequence so page 1's window
+  // is forced to end on the Vote slot and page 2's window is forced to
+  // (pre-guard) open on it — the exact adjacency the cursor-carried guard
+  // must prevent.
+  it('never lets two Vote cards land adjacent across a pagination boundary', async () => {
+    for (let i = 0; i < 20; i++) await seedReadyUpdate('u' + i);
+    await seedVoteEligibleEvent(); // candidate for page 1's Vote slot
+    await seedVoteEligibleEvent(); // a DISTINCT event so page 2 still has a Vote candidate once page 1's is cursor-excluded via `v` (vote-seen)
+
+    // shuffledWindow()'s 11-token pool is ['u'x7,'e','e','v','p'] (the 'v'
+    // token starts at index 9) and Fisher-Yates runs i = 10 down to 1,
+    // consuming one Math.random() call per i to pick j = floor(rand*(i+1)).
+    // Picking j = i is a no-op swap; these two sequences hold 'v' fixed
+    // except for one deliberate swap:
+    //   pageOneRandoms: no-op until i=9, then j=1 -> swaps index 9 ('v')
+    //     with index 1, giving ['u','v','u','u','u','u','u','e','e','u','p'].
+    //     Slot 0 isn't special, so the fresh-load slot-0 guard never fires,
+    //     and with limit 2 page 1 consumes slots 0 and 1 -> its LAST item is
+    //     the Vote card.
+    //   pageTwoRandoms: no-op until i=9, then j=0 -> swaps index 9 ('v')
+    //     into index 0 itself, giving ['v','u','u','u','u','u','u','e','e','u','p'].
+    //     With limit 1, page 2's only item is exactly this raw slot 0 —
+    //     'v' unless the continuation guard swaps it away.
+    const NOOP = 0.999999;
+    const pageOneRandoms = [0.99, 0.15, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP];
+    const pageTwoRandoms = [0.99, 0, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP];
+    const forcedSequence = [...pageOneRandoms, ...pageTwoRandoms];
+    let callIndex = 0;
+    const randomSpy = jest.spyOn(Math, 'random').mockImplementation(() => {
+      if (callIndex >= forcedSequence.length) throw new Error('feed.service test: Math.random() called more than the forced sequence expects — shuffledWindow() call count assumption broke');
+      return forcedSequence[callIndex++]!;
+    });
+
+    try {
+      const p1 = await getFeed({ tab: 'for-you', limit: 2 });
+      // Sanity check on the controlled setup itself, not the fix: if this
+      // fails, shuffledWindow()'s Fisher-Yates changed shape and the forced
+      // sequence above needs recomputing.
+      expect(p1.items[1]?.type).toBe('vote');
+      expect(p1.nextCursor).toBeTruthy();
+
+      const p2 = await getFeed({ tab: 'for-you', limit: 1, cursor: p1.nextCursor! });
+      // The actual regression guard: page 2's continuation window was forced
+      // to raw-open on 'v' — it must have been swapped away because page 1
+      // ended on a Vote card.
+      expect(p2.items[0]?.type).not.toBe('vote');
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   // Home feed follow-up (ticket): "Public Plans can be discovered through
   // the Home feed" / "publish a plan ... after it is created" / "remove it
   // immediately if it is changed to Private or cancelled".
