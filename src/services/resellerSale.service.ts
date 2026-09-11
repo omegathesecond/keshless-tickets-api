@@ -214,31 +214,8 @@ export class ResellerSaleService {
     if (sale.resellerId?.toString() !== resellerId) {
       throw new Error('Not authorized to send SMS for this sale');
     }
-    if (!sale.customerPhone) {
-      throw new Error('This sale has no customer phone number');
-    }
-
-    const event = await Event.findById(sale.eventId);
-    if (!event) {
-      throw new Error(`Event not found for sale: ${saleId}`);
-    }
-
-    const tickets = await Ticket.find({ _id: { $in: sale.ticketIds } });
-    if (tickets.length === 0) {
-      throw new Error('This sale has no issued tickets to send');
-    }
-
-    const sent = await SmsService.sendTicketConfirmation(
-      sale.customerPhone,
-      tickets.map((t) => ({
-        ticketId: t.ticketId,
-        eventName: event.name,
-        eventDate: event.eventDate.toISOString(),
-        venue: event.venue,
-      })),
-    );
-
-    return { sent };
+    // Same send for both rails — only the ownership check above differs.
+    return TicketService.sendSaleConfirmationSms(sale);
   }
 
   static async getOperatorSales(params: {

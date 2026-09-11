@@ -732,6 +732,68 @@ export class TicketService {
   /**
    * Get sales with filters and pagination
    */
+  /**
+   * Build and send the ticket confirmation SMS for an ALREADY-AUTHORIZED sale.
+   *
+   * Staff-INITIATED, so unlike the best-effort auto-send on the online rails
+   * this is not fire-and-forget: the caller gets the gateway's verdict so a
+   * till never reports success for a message that was not accepted.
+   *
+   * Authorization is deliberately NOT done here — the reseller rail scopes by
+   * `sale.resellerId` and the organizer rail by `sale.vendorId`, so each caller
+   * applies its own check and hands the authorized sale over.
+   */
+  static async sendSaleConfirmationSms(sale: ITicketSale): Promise<{ sent: boolean }> {
+    if (!sale.customerPhone) {
+      throw new Error('This sale has no customer phone number');
+    }
+
+    const event = await Event.findById(sale.eventId);
+    if (!event) {
+      throw new Error(`Event not found for sale: ${sale._id.toString()}`);
+    }
+
+    const tickets = await Ticket.find({ _id: { $in: sale.ticketIds } });
+    if (tickets.length === 0) {
+      throw new Error('This sale has no issued tickets to send');
+    }
+
+    const sent = await SmsService.sendTicketConfirmation(
+      sale.customerPhone,
+      tickets.map((t) => ({
+        ticketId: t.ticketId,
+        eventName: event.name,
+        eventDate: event.eventDate.toISOString(),
+        startTime: event.startTime?.toISOString(),
+        venue: event.venue,
+      })),
+    );
+
+    return { sent };
+  }
+
+  /**
+   * Organizer/box-office (re)send of the ticket SMS for a sale on the calling
+   * vendor's own event. `sellTickets` does not notify the customer at all, so
+   * for a box-office sale this is the only way the buyer gets their ticket
+   * digitally.
+   */
+  static async sendSaleSmsForVendor(
+    saleId: string,
+    vendorId: string,
+    isSuperAdmin = false,
+  ): Promise<{ sent: boolean }> {
+    const sale = await TicketSale.findById(saleId);
+    if (!sale) {
+      throw new Error(`Sale not found: ${saleId}`);
+    }
+    if (!isSuperAdmin && sale.vendorId?.toString() !== vendorId) {
+      throw new Error('Not authorized to send SMS for this sale');
+    }
+
+    return this.sendSaleConfirmationSms(sale);
+  }
+
   static async getSales(query: GetSalesQuery) {
     try {
       const {

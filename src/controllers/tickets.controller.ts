@@ -912,6 +912,57 @@ export class TicketsController {
   }
 
   /**
+   * Sales: (re)send the ticket confirmation SMS for a sale on this vendor's
+   * own event. A box-office sale notifies nobody at sale time, so this is the
+   * only way the walk-up buyer receives their ticket digitally.
+   *
+   * A gateway rejection is surfaced as 502 rather than a 200 with sent:false,
+   * so the till never shows success for a message that was not accepted.
+   */
+  static async sendSaleSms(req: Request, res: Response): Promise<any> {
+    try {
+      const ticketsUser = (req as any).ticketsUser;
+
+      const { error, value } = Joi.object({
+        saleId: Joi.string().required().regex(/^[0-9a-fA-F]{24}$/),
+      }).validate(req.params);
+
+      if (error) {
+        return ApiResponseUtil.error(res, error.details[0]?.message || 'Validation error', 400);
+      }
+
+      const { sent } = await TicketService.sendSaleSmsForVendor(
+        value.saleId,
+        ticketsUser.vendorId as string,
+        ticketsUser.isSuperAdmin || false,
+      );
+
+      if (!sent) {
+        return ApiResponseUtil.error(res, 'SMS gateway did not accept the message', 502);
+      }
+
+      return ApiResponseUtil.success(res, { sent }, 'Ticket SMS sent');
+    } catch (err: any) {
+      const msg = err?.message || '';
+      if (/not authorized/i.test(msg)) {
+        return ApiResponseUtil.error(res, 'Not authorized to send SMS for this sale', 403);
+      }
+      if (/no customer phone|no issued tickets/i.test(msg)) {
+        return ApiResponseUtil.error(res, msg, 400);
+      }
+      if (/event not found/i.test(msg)) {
+        console.error('Send sale SMS error (orphaned event):', err);
+        return ApiResponseUtil.error(res, 'Internal error: event data missing for this sale', 500);
+      }
+      if (/not found/i.test(msg)) {
+        return ApiResponseUtil.error(res, 'Sale not found', 404);
+      }
+      console.error('Send sale SMS error:', err);
+      return ApiResponseUtil.error(res, msg || 'Failed to send ticket SMS');
+    }
+  }
+
+  /**
    * Sales: Get sales
    */
   static async getSales(req: Request, res: Response): Promise<any> {

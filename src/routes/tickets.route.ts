@@ -425,6 +425,12 @@ router.post(
   TicketsController.sellTickets
 );
 
+router.post(
+  '/sales/:saleId/send-sms',
+  requireTicketsPermission(TicketsPermission.SELL_TICKETS),
+  TicketsController.sendSaleSms
+);
+
 router.get(
   '/sales',
   requireTicketsPermission(TicketsPermission.VIEW_SALES),
