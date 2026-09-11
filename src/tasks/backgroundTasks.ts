@@ -172,6 +172,7 @@ export function startBackgroundTasks(): NodeJS.Timeout[] {
 
   handles.push(setInterval(() => {
     ShareEarnService.autoCloseExpiredCampaigns().catch((err) => console.error('[share-earn-sweep] error', err));
+    ShareEarnService.notifyCampaignsClosingSoon().catch((err) => console.error('[share-earn-closing-soon] error', err));
   }, SHARE_EARN_SWEEP_MS));
 
   return handles;

@@ -169,4 +169,13 @@ notificationSchema.index(
   { unique: true, partialFilterExpression: { type: 'if_i_go_posted' }, name: 'if_i_go_posted_dedupe' }
 );
 
+// Share&Earn "campaign closing soon" (spec §15): one notification per
+// (promoter, campaign), same as the event reminder sweep's dedupe pattern —
+// ShareEarnService.notifyCampaignsClosingSoon pre-filters against this before
+// dispatching, so a campaign swept on every tick still only ever notifies once.
+notificationSchema.index(
+  { recipientId: 1, type: 1, 'data.shareEarnCampaignId': 1 },
+  { unique: true, partialFilterExpression: { type: 'share_earn_campaign_closing_soon' }, name: 'share_earn_campaign_closing_soon_dedupe' }
+);
+
 export const Notification = model<INotification>('Notification', notificationSchema);

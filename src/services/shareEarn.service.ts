@@ -13,7 +13,10 @@ import { ITicketSale, ITicket } from '@interfaces/ticket.interface';
 import { IShareEarnRewardRule, ShareEarnAuditAction } from '@interfaces/shareEarn.interface';
 import { HttpError } from '@utils/httpError.util';
 import { NotificationService } from '@services/notification.service';
+import { NotificationDispatcher } from '@services/notificationDispatcher.service';
 import { PushService } from '@services/push.service';
+
+const CLOSING_SOON_WINDOW_MS = 24 * 60 * 60 * 1000; // spec §15 "about to close"
 
 const REPEAT_BUYER_FLAG_THRESHOLD = 2; // 2nd+ confirmed sale from the same buyer under one promoter gets flagged for review
 
@@ -152,6 +155,7 @@ export class ShareEarnService {
       return campaign;
     }
 
+    const wasActiveOrPaused = campaign.status === 'active' || campaign.status === 'paused';
     if (campaign.status !== 'draft') {
       const existingById = new Map(campaign.rewardRules.map((r) => [r.ruleId, r]));
       for (const [ruleId, existing] of existingById) {
@@ -172,6 +176,16 @@ export class ShareEarnService {
       }
     }
 
+    // Terms a promoter already relies on — compared before mutating, so a
+    // change here notifies (spec §15 "organizer changes an important
+    // campaign term") without gating the save itself.
+    const termsChanged =
+      wasActiveOrPaused &&
+      (endsAt.getTime() !== campaign.endsAt.getTime() ||
+        (payload.terms ?? campaign.terms) !== campaign.terms ||
+        JSON.stringify(payload.eligibleTicketTypeIds ?? campaign.eligibleTicketTypeIds) !== JSON.stringify(campaign.eligibleTicketTypeIds) ||
+        (payload.allowSelfReferral ?? campaign.allowSelfReferral) !== campaign.allowSelfReferral);
+
     campaign.startsAt = startsAt;
     campaign.endsAt = endsAt;
     campaign.eligibleTicketTypeIds = payload.eligibleTicketTypeIds ?? campaign.eligibleTicketTypeIds;
@@ -185,6 +199,23 @@ export class ShareEarnService {
     campaign.updatedBy = vendor._id;
     await campaign.save();
     await log(campaign._id as Types.ObjectId, campaign.eventId, 'campaign_updated', { actorType: 'vendor', actorId: vendor._id });
+
+    if (termsChanged) {
+      const promoterBuyerIds = await ShareEarnPromoter.distinct('buyerId', { campaignId: campaign._id, status: { $ne: 'disqualified' } });
+      if (promoterBuyerIds.length) {
+        // Awaited (not dispatchAsync): an organizer's dashboard save is not a
+        // hot buyer-facing path, so it's worth the round-trip to make the
+        // fan-out deterministic rather than fire-and-forget.
+        await NotificationDispatcher.dispatch(
+          promoterBuyerIds.map(String),
+          'share_earn_campaign_terms_changed',
+          'Share&Earn campaign terms updated',
+          'The organizer updated an important term of a Share&Earn campaign you joined.',
+          { shareEarnCampaignId: String(campaign._id), eventId: String(campaign.eventId) }
+        );
+      }
+    }
+
     return campaign;
   }
 
@@ -247,6 +278,45 @@ export class ShareEarnService {
       { $set: { status: 'closed', closedAt: new Date() } }
     );
     return res.modifiedCount ?? 0;
+  }
+
+  /**
+   * "A campaign is about to close" (spec §15) — every promoter of a campaign
+   * ending within CLOSING_SOON_WINDOW_MS gets exactly one notification,
+   * enforced by the notification model's per-(recipient,campaign) unique
+   * index (same dedupe pattern as EventReminderService.sweep): safe to call
+   * on every background-task tick.
+   */
+  static async notifyCampaignsClosingSoon(): Promise<number> {
+    const now = new Date();
+    const campaigns = await ShareEarnCampaign.find({
+      status: { $in: ['active', 'paused'] },
+      endsAt: { $gt: now, $lte: new Date(now.getTime() + CLOSING_SOON_WINDOW_MS) },
+    }).select('_id eventId');
+
+    let notified = 0;
+    for (const campaign of campaigns) {
+      const promoterBuyerIds = await ShareEarnPromoter.distinct('buyerId', { campaignId: campaign._id, status: { $ne: 'disqualified' } });
+      if (!promoterBuyerIds.length) continue;
+
+      for (const buyerId of promoterBuyerIds) {
+        try {
+          await NotificationService.create(
+            'buyer',
+            String(buyerId),
+            'share_earn_campaign_closing_soon',
+            'Share&Earn campaign closing soon',
+            'A Share&Earn campaign you joined is about to close — get your last shares in.',
+            { shareEarnCampaignId: String(campaign._id), eventId: String(campaign.eventId) }
+          );
+          notified += 1;
+        } catch (err: any) {
+          if (err?.code === 11000) continue; // already notified — the unique index is the dedupe
+          console.error('[shareEarn] closing-soon notification failed', err);
+        }
+      }
+    }
+    return notified;
   }
 
   // ───────────────────────── Organizer: dashboard ───────────────────────────
