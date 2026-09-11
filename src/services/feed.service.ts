@@ -30,8 +30,14 @@ interface FeedOpts { tab: 'for-you' | 'following' | 'events'; cursor?: string; a
  *  the Home feed spec's "don't repeatedly show the same Vote during one
  *  browsing session" (§4) — event ids whose Vote card has already been
  *  served THIS session, across every tab that shows one. `p` ("plan-seen")
- *  is the same "don't repeat" treatment for Event Plan cards. */
-interface Cursor { e?: number; s?: string[]; v?: string[]; p?: string[]; }
+ *  is the same "don't repeat" treatment for Event Plan cards. `lv` ("last
+ *  was vote") marks that the previous page's last served item was a Vote
+ *  card — the pattern buffer is rebuilt from scratch on every getFeed()
+ *  call (including a paginated continuation), so without this the slot-0
+ *  guard that keeps a fresh load from opening on a Vote card has no memory
+ *  of what a continuation request's page just ended on, and two Vote cards
+ *  can land back-to-back across the pagination boundary. */
+interface Cursor { e?: number; s?: string[]; v?: string[]; p?: string[]; lv?: boolean; }
 
 function decode(cursor?: string): Cursor { if (!cursor) return {}; try { return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')); } catch { return {}; } }
 function encode(c: Cursor): string { return Buffer.from(JSON.stringify(c)).toString('base64url'); }
@@ -71,17 +77,23 @@ function shuffledWindow(): Slot[] {
  * guards so "continue displaying normal posts before and after each
  * Vote/Event Plan card" still holds despite the randomness: (1) never let a
  * 'v' or 'p' land right after the previous window's trailing slot of the
- * SAME type and (2) on a session's very first window, never put either in
- * slot 0 — the literal top of a fresh feed load ("do not always display the
- * Vote card at the top of the Home feed").
+ * SAME type and (2) on the buffer's very first window, never put a type
+ * named in `guardZeroFor` in slot 0. For a fresh load that's both 'v' and
+ * 'p' — the literal top of a fresh feed load ("do not always display the
+ * Vote card at the top of the Home feed"). For a paginated continuation
+ * request the buffer is rebuilt from scratch too, so `guardZeroFor` also
+ * carries 'v' when the previous page's cursor recorded that IT ended on a
+ * Vote card (`cur.lv`) — otherwise this fresh buffer's slot 0 has no memory
+ * of the prior page's trailing slot and two Vote cards can land back-to-back
+ * across the pagination boundary.
  */
-function appendWindow(pattern: Slot[], isFreshLoad: boolean): void {
+function appendWindow(pattern: Slot[], guardZeroFor: ReadonlySet<Slot>): void {
   const win = shuffledWindow();
   const isFirstWindow = pattern.length === 0;
   const prevTail = pattern[pattern.length - 1];
   for (const special of ['v', 'p'] as const) {
     if (win[0] !== special) continue;
-    if (!(prevTail === special || (isFirstWindow && isFreshLoad))) continue;
+    if (!(prevTail === special || (isFirstWindow && guardZeroFor.has(special)))) continue;
     const swapIdx = win.findIndex((t, idx) => idx > 0 && t !== 'v' && t !== 'p');
     if (swapIdx > 0) {
       const tmp = win[0]!;
@@ -297,9 +309,10 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
   const items: FeedSlide[] = [];
   const pattern: Slot[] = [];
   const isFreshLoad = !opts.cursor;
+  const guardZeroFor = new Set<Slot>(isFreshLoad ? (['v', 'p'] as const) : cur.lv ? (['v'] as const) : []);
   let pi = 0;
   while (items.length < limit && (q.u.length || q.e.length || q.v.length || q.p.length)) {
-    if (pi >= pattern.length) appendWindow(pattern, isFreshLoad);
+    if (pi >= pattern.length) appendWindow(pattern, guardZeroFor);
     const slot = pattern[pi]!;
     pi++;
     const bucket = q[slot];
@@ -326,6 +339,10 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
   const consumedVoteEventIds = items.filter((i) => i.type === 'vote').map((i) => i.id);
   const mergedVoteSeen = [...(cur.v ?? []), ...consumedVoteEventIds];
   if (mergedVoteSeen.length) next.v = mergedVoteSeen;
+  // Carried to the next page's slot-0 guard (see appendWindow's doc comment)
+  // so a continuation request can't open on a Vote card right after this
+  // page's last item was one.
+  if (items[items.length - 1]?.type === 'vote') next.lv = true;
 
   const consumedPlanIds = items.filter((i) => i.type === 'plan').map((i) => i.id);
   const mergedPlanSeen = [...(cur.p ?? []), ...consumedPlanIds];
