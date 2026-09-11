@@ -7,6 +7,7 @@ import { MenuOrderService } from '@services/menuOrder.service';
 import { ReconciliationService } from '@services/reconciliation.service';
 import { AccountActivityDigestService } from '@services/accountActivityDigest.service';
 import { VoteNotificationService } from '@services/voteNotification.service';
+import { ShareEarnService } from '@services/shareEarn.service';
 
 // Start the reservation expiry sweep
 const RESERVATION_SWEEP_MS = 60_000;
@@ -92,6 +93,11 @@ const ACCOUNT_ACTIVITY_DIGEST_MS = 1_800_000;
 // reminder. Same cadence as the event reminder sweep.
 const VOTE_SWEEP_MS = 600_000;
 
+// Share&Earn (spec §17): auto-close campaigns whose closing date has passed —
+// stops accepting new referrals while preserving everything already earned.
+// Same cadence as the event reminder/Vote sweeps.
+const SHARE_EARN_SWEEP_MS = 600_000;
+
 /**
  * Registers all periodic background sweeps (reservation expiry, card-sale
  * reconciliation, event reminders, stuck-update reconciliation) with their
@@ -163,6 +169,10 @@ export function startBackgroundTasks(): NodeJS.Timeout[] {
   handles.push(setInterval(() => {
     VoteNotificationService.sweep().catch((err) => console.error('[vote-sweep] error', err));
   }, VOTE_SWEEP_MS));
+
+  handles.push(setInterval(() => {
+    ShareEarnService.autoCloseExpiredCampaigns().catch((err) => console.error('[share-earn-sweep] error', err));
+  }, SHARE_EARN_SWEEP_MS));
 
   return handles;
 }

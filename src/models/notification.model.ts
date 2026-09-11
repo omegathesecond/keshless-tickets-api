@@ -33,7 +33,21 @@ export type NotificationType =
   // flowing back to the respondent.
   | 'if_i_go_posted'
   | 'if_i_go_response'
-  | 'if_i_go_status_changed';
+  | 'if_i_go_status_changed'
+  // Share&Earn (spec §15) — join confirmation, referred-sale confirmation,
+  // reward lifecycle (confirmed/available/redeemed/reversed), milestone
+  // reached, campaign closing soon / terms changed, and the platform-wide
+  // launch announcement.
+  | 'share_earn_joined'
+  | 'share_earn_sale_confirmed'
+  | 'share_earn_reward_confirmed'
+  | 'share_earn_milestone_reached'
+  | 'share_earn_reward_available'
+  | 'share_earn_reward_redeemed'
+  | 'share_earn_reward_reversed'
+  | 'share_earn_campaign_closing_soon'
+  | 'share_earn_campaign_terms_changed'
+  | 'share_earn_launch';
 
 export type NotificationRecipientType = 'buyer' | 'vendor';
 
@@ -87,6 +101,16 @@ const notificationSchema = new Schema<INotification>(
         'if_i_go_posted',
         'if_i_go_response',
         'if_i_go_status_changed',
+        'share_earn_joined',
+        'share_earn_sale_confirmed',
+        'share_earn_reward_confirmed',
+        'share_earn_milestone_reached',
+        'share_earn_reward_available',
+        'share_earn_reward_redeemed',
+        'share_earn_reward_reversed',
+        'share_earn_campaign_closing_soon',
+        'share_earn_campaign_terms_changed',
+        'share_earn_launch',
       ],
       required: true,
     },

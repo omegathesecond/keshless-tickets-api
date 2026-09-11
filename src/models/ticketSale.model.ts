@@ -224,6 +224,9 @@ const ticketSaleSchema = new Schema<ITicketSale>({
   resellerRemitted: { type: Boolean, default: false, index: true },
   commissionWithdrawn: { type: Boolean, default: false, index: true },
 
+  // Share&Earn referral attribution — see ITicketSale.shareEarnReferralCode.
+  shareEarnReferralCode: { type: String, trim: true, sparse: true, index: true },
+
   // Timestamps
   soldAt: {
     type: Date,

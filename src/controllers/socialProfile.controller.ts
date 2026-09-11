@@ -21,6 +21,7 @@ import { onlineBuyerIds } from '@utils/buyerOnline.util';
 import { DmEligibilityService } from '@services/dmEligibility.service';
 import { vapidConfigured, VAPID_PUBLIC_KEY } from '@config/vapid.config';
 import { totalStoryPoints } from '@services/storyPoints.service';
+import { totalShareEarnPoints } from '@services/shareEarn.service';
 import { NAME_CHANGE_COOLDOWN_MS } from '@models/buyer.model';
 
 /** Human-readable form of the message the spec requires verbatim:
@@ -66,7 +67,7 @@ export class SocialProfileController {
       await ensureUsername(buyer);
 
       const myId = String(buyer._id);
-      const [followerCount, followingCount, friendIds, attendedEventIds, postCount, storyPoints] = await Promise.all([
+      const [followerCount, followingCount, friendIds, attendedEventIds, postCount, storyPoints, shareEarnPoints] = await Promise.all([
         FollowService.followerCount('buyer', myId),
         FollowService.followingCount(myId),
         FollowService.friendIds(myId),
@@ -80,6 +81,9 @@ export class SocialProfileController {
         // live data — Stories TTL-delete after 48h, so it's a persisted
         // ledger total (see @services/storyPoints.service), not a count.
         totalStoryPoints(myId),
+        // Same ledger reasoning as storyPoints — a Share&Earn points reward is
+        // an event with no other durable record (see @services/shareEarn.service).
+        totalShareEarnPoints(myId),
       ]);
       return ApiResponseUtil.success(res, {
         ...SocialProfileController.toOwnProfile(buyer),
@@ -89,6 +93,7 @@ export class SocialProfileController {
         eventsAttended: attendedEventIds.length,
         postCount,
         storyPoints,
+        shareEarnPoints,
       });
     } catch (error: any) {
       console.error('Get social profile error:', error);

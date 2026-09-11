@@ -40,6 +40,7 @@ import { ReportController } from '@controllers/report.controller';
 import { EnquiryController } from '@controllers/enquiry.controller';
 import { UpdateController } from '@controllers/update.controller';
 import { VoteAdminController } from '@controllers/voteAdmin.controller';
+import { ShareEarnOrganizerController } from '@controllers/shareEarnOrganizer.controller';
 
 const router = Router();
 
@@ -649,6 +650,26 @@ router.get('/events/:eventId/vote/preview', requireTicketsPermission(TicketsPerm
 router.get('/events/:eventId/vote/summary', requireTicketsPermission(TicketsPermission.VIEW_STATS), VoteAdminController.summary);
 router.get('/vote-questions/:questionId/comments', requireTicketsPermission(TicketsPermission.VIEW_STATS), VoteAdminController.comments);
 router.delete('/vote-comments/:commentId', requireTicketsPermission(TicketsPermission.MANAGE_ACCESS), VoteAdminController.removeComment);
+
+/**
+ * Share&Earn (organizer dashboard §1/§10) — configure/preview/activate the
+ * reward structure (EDIT_EVENT, same gate as the rest of event setup), view
+ * the campaign dashboard (VIEW_STATS), and review/disqualify/confirm reward
+ * fulfilment (MANAGE_ACCESS — the same permission that gates other
+ * organizer moderation actions, e.g. vote-comment removal above).
+ */
+router.get('/events/:eventId/share-earn/campaign', requireTicketsPermission(TicketsPermission.VIEW_STATS), ShareEarnOrganizerController.getCampaign);
+router.put('/events/:eventId/share-earn/campaign', requireTicketsPermission(TicketsPermission.EDIT_EVENT), ShareEarnOrganizerController.upsertCampaign);
+router.post('/events/:eventId/share-earn/campaign/activate', requireTicketsPermission(TicketsPermission.EDIT_EVENT), ShareEarnOrganizerController.activate);
+router.post('/events/:eventId/share-earn/campaign/pause', requireTicketsPermission(TicketsPermission.EDIT_EVENT), ShareEarnOrganizerController.pause);
+router.post('/events/:eventId/share-earn/campaign/close', requireTicketsPermission(TicketsPermission.EDIT_EVENT), ShareEarnOrganizerController.close);
+router.post('/events/:eventId/share-earn/campaign/registrations', requireTicketsPermission(TicketsPermission.EDIT_EVENT), ShareEarnOrganizerController.setRegistrationsPaused);
+router.get('/events/:eventId/share-earn/dashboard', requireTicketsPermission(TicketsPermission.VIEW_STATS), ShareEarnOrganizerController.dashboard);
+router.get('/events/:eventId/share-earn/promoters', requireTicketsPermission(TicketsPermission.VIEW_STATS), ShareEarnOrganizerController.promoters);
+router.get('/events/:eventId/share-earn/referrals/flagged', requireTicketsPermission(TicketsPermission.MANAGE_ACCESS), ShareEarnOrganizerController.flaggedReferrals);
+router.post('/events/:eventId/share-earn/referrals/:referralId/review', requireTicketsPermission(TicketsPermission.MANAGE_ACCESS), ShareEarnOrganizerController.reviewReferral);
+router.post('/events/:eventId/share-earn/rewards/:rewardId/confirm', requireTicketsPermission(TicketsPermission.MANAGE_ACCESS), ShareEarnOrganizerController.confirmReward);
+router.get('/events/:eventId/share-earn/export.csv', requireTicketsPermission(TicketsPermission.EXPORT_REPORTS), ShareEarnOrganizerController.exportCsv);
 
 router.get('/events/:eventId/tags/summary', requireTicketsPermission(TicketsPermission.VIEW_REVENUE), TagReportController.summary);
 router.get('/events/:eventId/tags/registrations', requireTicketsPermission(TicketsPermission.VIEW_REVENUE), TagReportController.registrations);

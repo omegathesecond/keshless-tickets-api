@@ -167,6 +167,12 @@ export interface ITicketSale extends Document {
   resellerRemitted: boolean;
   commissionWithdrawn?: boolean;
 
+  // Share&Earn — the referral code the buyer's checkout carried, if any.
+  // Stamped at sale CREATION (every rail: sellTickets + each initiate*Purchase)
+  // so the async rails can still attribute a referral once the webhook lands,
+  // long after the request that started checkout is gone. See ShareEarnService.
+  shareEarnReferralCode?: string;
+
   // Timestamps
   soldAt: Date;
   createdAt: Date;

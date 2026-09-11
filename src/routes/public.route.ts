@@ -17,6 +17,7 @@ import { requireProfilePhoto } from '@middleware/requirePhoto.middleware';
 import { avatarUpload, communityEventUpload, handleMulterError, validateFileUpload } from '@middleware/media.middleware';
 import { CommunityEventSubmitController } from '@controllers/communityEventSubmit.controller';
 import { VoteController } from '@controllers/vote.controller';
+import { ShareEarnController } from '@controllers/shareEarn.controller';
 
 const router = Router();
 
@@ -176,6 +177,22 @@ router.get('/vote-questions/:questionId/comments', optionalTicketsAuth, VoteCont
 router.post('/vote-questions/:questionId/comments', authenticateBuyerOrOrganizer, VoteController.postComment);
 router.post('/vote-comments/:commentId/react', authenticateBuyerOrOrganizer, VoteController.reactToComment);
 router.delete('/vote-comments/:commentId', authenticateBuyerOrOrganizer, VoteController.deleteComment);
+
+/**
+ * Share&Earn — event-detail info/join (spec §2/§3, visible logged out),
+ * link-click tracking + code resolution (§4/§5, public), My Share&Earn (§9)
+ * and reward redemption/leaderboard opt-out (§8/§14) require a signed-in
+ * buyer. Fixed-segment routes registered before '/events/:eventId/...' where
+ * they'd otherwise collide — same convention as eventPlan.route.ts.
+ */
+router.get('/my-share-earn', authenticateBuyer, ShareEarnController.mine);
+router.post('/share-earn/track-click', ShareEarnController.trackClick);
+router.get('/share-earn/resolve/:referralCode', ShareEarnController.resolveCode);
+router.patch('/share-earn/promoters/:promoterId/leaderboard-opt-out', authenticateBuyer, ShareEarnController.setLeaderboardOptOut);
+router.post('/share-earn/rewards/:rewardId/redeem', authenticateBuyer, ShareEarnController.redeemReward);
+router.get('/events/:eventId/share-earn', optionalTicketsAuth, ShareEarnController.getEventCampaign);
+router.post('/events/:eventId/share-earn/join', authenticateBuyer, ShareEarnController.join);
+router.get('/events/:eventId/share-earn/leaderboard', ShareEarnController.leaderboard);
 
 /**
  * @route   GET /api/public/events/live

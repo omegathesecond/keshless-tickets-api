@@ -175,6 +175,13 @@ const legacyTierFields = {
   quantity: Joi.number().integer().min(1).max(MAX_TICKETS_PER_ORDER).optional(),
 };
 
+// Share&Earn — the referral code the buyer's checkout carried (from the
+// event page's ?ref= link, persisted client-side). Spread into every paid
+// checkout schema below; see ShareEarnService.registerPendingReferral.
+const shareEarnFields = {
+  referralCode: Joi.string().trim().max(40).optional(),
+};
+
 /**
  * The cart for a validated purchase body, from either shape. Never guesses: a
  * body carrying neither is a validation error the caller must see.
@@ -195,6 +202,7 @@ const cardInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
   items: cartItemsSchema,
   ...legacyTierFields,
+  ...shareEarnFields,
   customerName: Joi.string().max(100).optional(),
 }).or('items', 'ticketTypeId');
 
@@ -204,6 +212,7 @@ const deltapayInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
   items: cartItemsSchema,
   ...legacyTierFields,
+  ...shareEarnFields,
   customerName: Joi.string().max(100).optional(),
 }).or('items', 'ticketTypeId');
 
@@ -213,6 +222,7 @@ const yocoInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
   items: cartItemsSchema,
   ...legacyTierFields,
+  ...shareEarnFields,
   customerName: Joi.string().max(100).optional(),
 }).or('items', 'ticketTypeId');
 
@@ -223,6 +233,7 @@ const yebopayInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
   items: cartItemsSchema,
   ...legacyTierFields,
+  ...shareEarnFields,
   customerName: Joi.string().max(100).optional(),
 }).or('items', 'ticketTypeId');
 
@@ -231,6 +242,7 @@ const momoInitiateSchema = Joi.object({
   eventId: Joi.string().hex().length(24).required(),
   items: cartItemsSchema,
   ...legacyTierFields,
+  ...shareEarnFields,
   customerName: Joi.string().max(100).optional(),
   momoPhone: Joi.string().pattern(/^[0-9]{8,15}$/).required(),
 }).or('items', 'ticketTypeId');
@@ -280,6 +292,7 @@ const publicPurchaseSchema = Joi.object({
   eventId: Joi.string().required().regex(/^[0-9a-fA-F]{24}$/),
   items: cartItemsSchema,
   ...legacyTierFields,
+  ...shareEarnFields,
   // The buyer's phone is NO LONGER taken from the body — it comes from the
   // OTP-verified buyer token (req.ticketsUser.userPhone). This guarantees
   // every ticket is tied to a phone the buyer actually controls, so it always
@@ -856,6 +869,7 @@ export class PublicController {
         customerName: value.customerName as string | undefined,
         keshlessCardNumber,
         keshlessPin,
+        referralCode: typeof value.referralCode === 'string' ? value.referralCode : undefined,
       });
 
       return ApiResponseUtil.created(res, result, 'Tickets purchased successfully!');
