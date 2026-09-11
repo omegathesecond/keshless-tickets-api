@@ -1,6 +1,7 @@
 import { Story, IStory } from '@models/story.model';
 import { StorySeen } from '@models/storySeen.model';
 import { StoryLike } from '@models/storyLike.model';
+import { Follow } from '@models/follow.model';
 import { Buyer } from '@models/buyer.model';
 import { Vendor } from '@models/vendor.model';
 import { updatesR2 } from '@utils/updatesR2';
@@ -14,7 +15,10 @@ import { HttpError } from '@utils/httpError.util';
 import { isActorAuthorOf, type SocialActor } from '@utils/socialActor.util';
 import type { StoryKind } from '@interfaces/story.interface';
 
-const STORY_TTL_MS = 48 * 60 * 60 * 1000;
+// Exported so ifIGo.service can stamp the same expiry on both the Story doc
+// and its durable IfIGoStory sibling (see @models/ifIGoStory.model) without
+// two different TTL constants drifting apart.
+export const STORY_TTL_MS = 48 * 60 * 60 * 1000;
 
 /**
  * How long a still image is shown before the viewer auto-advances. Images
@@ -27,11 +31,17 @@ const STORY_TTL_MS = 48 * 60 * 60 * 1000;
 const IMAGE_DURATION_SEC = 5;
 /** Ceiling on a video's own duration, so one long upload can't wedge the rail. */
 const MAX_DURATION_SEC = 30;
+/** An 'if_i_go' card stays up longer than a plain image — there's a question
+ *  and several response buttons to read, not just a photo to glance at. The
+ *  client also pauses autoplay while the viewer is actively interacting with
+ *  it (same affordance as a long-press pause), so this is only the default. */
+const IF_I_GO_DURATION_SEC = 20;
 
 /** Playback seconds for one story item — never null, always within [1, 30]. */
 function playbackDurationSec(story: Pick<IStory, 'kind' | 'media'>): number {
+  if (story.kind === 'if_i_go') return IF_I_GO_DURATION_SEC;
   if (story.kind === 'image') return IMAGE_DURATION_SEC;
-  const raw = story.media.video?.durationSec ?? IMAGE_DURATION_SEC;
+  const raw = story.media?.video?.durationSec ?? IMAGE_DURATION_SEC;
   return Math.min(MAX_DURATION_SEC, Math.max(1, Math.round(raw)));
 }
 
@@ -56,9 +66,12 @@ export async function createStory(input: CreateStoryInput): Promise<{ story: ISt
 }
 
 /**
- * Mirrors update.service#finalizeUpdate: image finalizes to 'ready'
- * immediately; video kicks off the async transcoder and stays 'processing'
- * until it calls back.
+ * Image finalizes to 'ready' immediately; video kicks off the async
+ * transcoder and stays 'processing' until it calls back. Shared by
+ * finalizeStory below (image/video kind Stories) AND
+ * ifIGo.service#finalizeIfIGoStory (an 'if_i_go' Story's OPTIONAL attached
+ * media) — extracted so the two never drift on how a raw upload becomes
+ * ready media (DRY; this used to be inlined in finalizeStory alone).
  *
  * The transcoder microservice (transcoder/src/db.ts + transcoder/src/index.ts)
  * targets whichever collection `triggerTranscode`'s `collection` field names
@@ -66,36 +79,44 @@ export async function createStory(input: CreateStoryInput): Promise<{ story: ISt
  * not an array (`media.0.*`) like Update, so the transcoder branches its
  * write path on this same field. See transcode.client#Transcodable.
  */
-export async function finalizeStory(id: string): Promise<IStory> {
-  const story = await Story.findById(id);
-  if (!story) throw new HttpError(404, 'Story not found');
-  if (story.kind === 'image') {
+export async function finalizeMediaOnStory(story: IStory, mediaKind: 'image' | 'video'): Promise<void> {
+  if (!story.media) throw new HttpError(400, 'No media to finalize on this story');
+  if (mediaKind === 'image') {
     story.media.image = { url: updatesR2.publicUrl(story.media.rawKey), width: 0, height: 0 };
     story.media.status = 'ready';
     await story.save();
-    if (story.authorType === 'buyer') {
-      // Awaited (unlike triggerTranscode below, a real network call worth not
-      // blocking on): this is one more write to the same database, and
-      // awaiting it means the caller's balance is correct the moment finalize
-      // resolves. A failure here must never fail the story upload itself, but
-      // it must be visible, not swallowed — hence catch-and-log, not catch-and-ignore.
-      try {
-        await awardStoryPointsIfEligible(story.authorId, story._id);
-      } catch (err: any) {
-        console.error('awardStoryPointsIfEligible failed:', err?.message);
-      }
-    }
-    return story;
+    return;
   }
   story.media.processingStartedAt = new Date();
   story.media.status = 'processing';
   await story.save();
   // fire-and-forget; durability comes from reconcileStuckStories, same as
-  // finalizeUpdate relies on reconcileStuckUpdates. Story.media stays a
-  // single embedded doc (unlike Update.media, now an array — see
-  // @models/update.model), so it's wrapped here to satisfy Transcodable's
-  // array shape without changing StoryMedia's cardinality.
+  // finalizeUpdate relies on reconcileStuckUpdates.
   triggerTranscode({ id: story.id, media: [{ rawKey: story.media.rawKey }], collection: 'stories' }).catch((err: any) => console.error('triggerTranscode (story) failed:', err?.message));
+}
+
+/** Mirrors update.service#finalizeUpdate for a plain image/video Story. */
+export async function finalizeStory(id: string): Promise<IStory> {
+  const story = await Story.findById(id);
+  if (!story) throw new HttpError(404, 'Story not found');
+  if (story.kind === 'if_i_go') {
+    // 'if_i_go' Stories finalize via ifIGo.service#finalizeIfIGoStory (its
+    // own publish/notify side-effects don't belong in this generic path).
+    throw new HttpError(400, 'Use the If I Go finalize endpoint for this story');
+  }
+  await finalizeMediaOnStory(story, story.kind);
+  if (story.kind === 'image' && story.authorType === 'buyer') {
+    // Awaited (unlike triggerTranscode above, a real network call worth not
+    // blocking on): this is one more write to the same database, and
+    // awaiting it means the caller's balance is correct the moment finalize
+    // resolves. A failure here must never fail the story upload itself, but
+    // it must be visible, not swallowed — hence catch-and-log, not catch-and-ignore.
+    try {
+      await awardStoryPointsIfEligible(story.authorId, story._id);
+    } catch (err: any) {
+      console.error('awardStoryPointsIfEligible failed:', err?.message);
+    }
+  }
   // NOTE: video stories still never earn points, but now for a legitimate
   // reason (not the collection-routing bug this fixed): the transcoder
   // callback that flips media.status to 'ready' happens well after
@@ -339,8 +360,21 @@ export interface StoryItemDto {
   id: string;
   mediaUrl: string;
   kind: StoryKind;
+  /** For 'if_i_go' only, and only when `mediaUrl` is non-empty: whether that
+   *  attached media is a photo or a video — `kind` itself stays 'if_i_go'
+   *  either way (unlike a plain Story, where `kind` IS the media type), so
+   *  without this the client has no way to know which element to render for
+   *  a non-empty mediaUrl. Undefined for every other case (plain 'image'/
+   *  'video' kinds already answer this via `kind`; a medialess 'if_i_go'
+   *  card has no media element to pick between). */
+  mediaKind?: 'image' | 'video';
   durationSec: number;
   createdAt: Date;
+  /** 'if_i_go' only — optional caption under the question (spec §1.2). */
+  caption?: string;
+  /** 'if_i_go' only, and only when no media was attached — the flat brand
+   *  backdrop (see story.model.IF_I_GO_BACKGROUND_PRESETS). */
+  background?: { preset: string };
   /** How many others have seen this item. Only populated on the viewer's OWN
    *  items — view counts on other people's stories are private. */
   viewerCount?: number;
@@ -419,6 +453,27 @@ export async function listForViewer(actor: SocialActor): Promise<StoryGroupDto[]
   const seenSet = new Set(seenRows.map((r: any) => String(r.storyId)));
   const likedSet = new Set(likedRows.map((r: any) => String(r.storyId)));
 
+  // Who among this batch's 'followers'-scoped authors the viewer actually
+  // follows — scoped to just those authors, not a full following list.
+  // Keyed `${targetType}:${targetId}` since an author can be a buyer OR an
+  // organizer brand and Follow.targetType distinguishes the two.
+  const followersScopedAuthors = stories.filter((s) => s.audience === 'followers');
+  const followingAuthorIds = new Set<string>();
+  if (followersScopedAuthors.length) {
+    const byTargetType = new Map<'buyer' | 'organizer', Set<string>>();
+    for (const s of followersScopedAuthors) {
+      const targetType = s.authorType === 'vendor' ? 'organizer' : 'buyer';
+      if (!byTargetType.has(targetType)) byTargetType.set(targetType, new Set());
+      byTargetType.get(targetType)!.add(String(s.authorId));
+    }
+    const followRows = await Follow.find({
+      followerType: actor.type,
+      followerId: actor.id,
+      $or: [...byTargetType.entries()].map(([targetType, ids]) => ({ targetType, targetId: { $in: [...ids] } })),
+    }).select('targetId');
+    for (const r of followRows) followingAuthorIds.add(String(r.targetId));
+  }
+
   // "Seen by N" / "Liked by N" for the viewer's OWN items, so the rail/viewer
   // can label both counts without extra round-trips. Scoped to own stories
   // only — seen/like counts on other people's stories are the author's
@@ -446,8 +501,14 @@ export async function listForViewer(actor: SocialActor): Promise<StoryGroupDto[]
     const isOwnStory = isActorAuthorOf(s.authorType, s.authorId, actor);
     // Someone else's still-processing/failed upload is theirs to see, not
     // the viewer's — only the author gets a non-'ready' item (see the query
-    // comment above and StoryItemDto.mediaStatus).
-    if (!isOwnStory && s.media.status !== 'ready') continue;
+    // comment above and StoryItemDto.mediaStatus). A medialess 'if_i_go'
+    // card (background-only) has no media doc at all and is always ready.
+    const mediaReady = !s.media || s.media.status === 'ready';
+    if (!isOwnStory && !mediaReady) continue;
+    // 'if_i_go' audience narrowing (spec §1.4): a story explicitly scoped to
+    // 'followers' is invisible to everyone else, own-story exempted like
+    // every other gate here.
+    if (!isOwnStory && s.audience === 'followers' && !followingAuthorIds.has(String(s.authorId))) continue;
     const key = `${s.authorType}:${String(s.authorId)}`;
     let group = groups.get(key);
     if (!group) {
@@ -458,15 +519,19 @@ export async function listForViewer(actor: SocialActor): Promise<StoryGroupDto[]
       group = { author, items: [], seen: true, isOwn, latestCreatedAt: 0 };
       groups.set(key, group);
     }
-    const mediaUrl = (s.kind === 'image' ? s.media.image?.url : s.media.video?.url) ?? '';
+    const visualKind = s.kind === 'if_i_go' ? (s.media?.video ? 'video' : s.media?.image ? 'image' : null) : s.kind;
+    const mediaUrl = visualKind === 'video' ? s.media?.video?.url ?? '' : visualKind === 'image' ? s.media?.image?.url ?? '' : '';
     group.items.push({
       id: s.id,
       mediaUrl,
       kind: s.kind,
+      ...(s.kind === 'if_i_go' && visualKind ? { mediaKind: visualKind } : {}),
       durationSec: playbackDurationSec(s),
       createdAt: s.createdAt,
       viewerHasLiked: likedSet.has(String(s._id)),
-      mediaStatus: s.media.status,
+      mediaStatus: s.media?.status ?? 'ready',
+      ...(s.caption ? { caption: s.caption } : {}),
+      ...(s.background ? { background: s.background } : {}),
       ...(isOwnStory ? { viewerCount: viewerCounts.get(String(s._id)) ?? 0, likeCount: likeCounts.get(String(s._id)) ?? 0 } : {}),
     });
     group.latestCreatedAt = s.createdAt.getTime();

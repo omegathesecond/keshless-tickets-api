@@ -26,7 +26,14 @@ export type NotificationType =
   | 'vote_opened'
   | 'vote_reminder'
   | 'vote_tag_request'
-  | 'vote_tag_response';
+  | 'vote_tag_response'
+  // If I Go… (spec §4/§13) — publish fan-out to followers, a response
+  // arriving (grouped: one notification per response event, even if it
+  // covers several selected options), and a status change the creator makes
+  // flowing back to the respondent.
+  | 'if_i_go_posted'
+  | 'if_i_go_response'
+  | 'if_i_go_status_changed';
 
 export type NotificationRecipientType = 'buyer' | 'vendor';
 
@@ -77,6 +84,9 @@ const notificationSchema = new Schema<INotification>(
         'vote_reminder',
         'vote_tag_request',
         'vote_tag_response',
+        'if_i_go_posted',
+        'if_i_go_response',
+        'if_i_go_status_changed',
       ],
       required: true,
     },
@@ -124,6 +134,15 @@ notificationSchema.index(
 notificationSchema.index(
   { recipientId: 1, type: 1, 'data.eventId': 1 },
   { unique: true, partialFilterExpression: { type: 'vote_reminder' }, name: 'vote_reminder_dedupe' }
+);
+
+// If I Go… publish notification (spec §4): "send only one notification"
+// even if the finalize call is retried or several frames publish as one
+// sequence — one row per (recipient, story), enforced at the DB same as the
+// primary defense-in-depth guard in ifIGo.service#notifyFollowersOfPublish.
+notificationSchema.index(
+  { recipientId: 1, type: 1, 'data.storyId': 1 },
+  { unique: true, partialFilterExpression: { type: 'if_i_go_posted' }, name: 'if_i_go_posted_dedupe' }
 );
 
 export const Notification = model<INotification>('Notification', notificationSchema);

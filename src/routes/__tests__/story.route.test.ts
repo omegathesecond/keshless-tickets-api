@@ -45,7 +45,7 @@ describe('Stories API', () => {
       expect(res.body.data.uploadUrl).toContain('https://r2.example/put');
       expect(res.body.data.storyId).toBeTruthy();
       const stored = await Story.findById(res.body.data.storyId);
-      expect(stored?.media.status).toBe('processing');
+      expect(stored?.media!.status).toBe('processing');
       expect(stored?.expiresAt.getTime()).toBeGreaterThan(Date.now());
     });
 

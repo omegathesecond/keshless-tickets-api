@@ -73,7 +73,7 @@ export const muteSchema = Joi.object({
 });
 
 export const reportSchema = Joi.object({
-  targetType: Joi.string().valid('message', 'buyer').required(),
+  targetType: Joi.string().valid('message', 'buyer', 'story').required(),
   messageId: Joi.string()
     .hex()
     .length(24)
@@ -82,6 +82,10 @@ export const reportSchema = Joi.object({
     .hex()
     .length(24)
     .when('targetType', { is: 'buyer', then: Joi.required(), otherwise: Joi.forbidden() }),
+  targetStoryId: Joi.string()
+    .hex()
+    .length(24)
+    .when('targetType', { is: 'story', then: Joi.required(), otherwise: Joi.forbidden() }),
   reason: Joi.string().trim().min(1).max(500).required(),
 });
 

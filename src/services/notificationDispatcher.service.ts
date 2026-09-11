@@ -52,6 +52,11 @@ export const PREF_BY_TYPE: Record<NotificationType, keyof NotificationPrefs> = {
   vote_reminder: 'social',
   vote_tag_request: 'social',
   vote_tag_response: 'social',
+  // If I Go… (spec §4/§13) — same 'social' bucket as Vote/Plans; all three
+  // routed through this dispatcher (publish fan-out, response, status change).
+  if_i_go_posted: 'social',
+  if_i_go_response: 'social',
+  if_i_go_status_changed: 'social',
 };
 
 const CHUNK = 50;

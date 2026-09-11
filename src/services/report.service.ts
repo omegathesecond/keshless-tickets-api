@@ -5,6 +5,7 @@ import { Channel } from '@models/channel.model';
 import { Community } from '@models/community.model';
 import { Event } from '@models/event.model';
 import { Update } from '@models/update.model';
+import { Story } from '@models/story.model';
 import { HttpError } from '@utils/httpError.util';
 import { toBuyerSummary, BuyerSummary } from '@utils/buyerSummary.util';
 import { consumeToken } from '@utils/rateLimit.util';
@@ -59,6 +60,7 @@ export class ReportService {
       messageId?: string;
       targetBuyerId?: string;
       targetUpdateId?: string;
+      targetStoryId?: string;
       reason: string;
     }
   ): Promise<{ report: IReport; created: boolean }> {
@@ -79,6 +81,13 @@ export class ReportService {
       }
       const exists = await Buyer.exists({ _id: input.targetBuyerId });
       if (!exists) throw new HttpError(404, 'Buyer not found');
+    } else if (input.targetType === 'story') {
+      // Covers an inappropriate If I Go poll (question/custom options) or any
+      // other Story — spec §16 "report inappropriate options, responses or
+      // messages"; a reported response's private message is included in the
+      // reason text since it isn't its own document.
+      const exists = await Story.exists({ _id: input.targetStoryId });
+      if (!exists) throw new HttpError(404, 'Story not found');
     } else {
       const exists = await Update.exists({ _id: input.targetUpdateId });
       if (!exists) throw new HttpError(404, 'Update not found');
@@ -91,6 +100,7 @@ export class ReportService {
         messageId: input.targetType === 'message' ? input.messageId : undefined,
         targetBuyerId: input.targetType === 'buyer' ? input.targetBuyerId : undefined,
         targetUpdateId: input.targetType === 'update' ? input.targetUpdateId : undefined,
+        targetStoryId: input.targetType === 'story' ? input.targetStoryId : undefined,
         reason: input.reason,
       });
       return { report, created: true };
@@ -99,6 +109,7 @@ export class ReportService {
       const dedupeQuery: Record<string, unknown> = { reporterId: buyer._id, status: 'open' };
       if (input.targetType === 'message') dedupeQuery['messageId'] = input.messageId;
       else if (input.targetType === 'buyer') dedupeQuery['targetBuyerId'] = input.targetBuyerId;
+      else if (input.targetType === 'story') dedupeQuery['targetStoryId'] = input.targetStoryId;
       else dedupeQuery['targetUpdateId'] = input.targetUpdateId;
       const existing = await Report.findOne(dedupeQuery);
       if (!existing) throw err; // shouldn't happen — surface rather than swallow

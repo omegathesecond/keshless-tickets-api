@@ -44,8 +44,8 @@ describe('reconcileStuckStories', () => {
     });
     await reconcileStuckStories();
     const after = await Story.findById(s.id);
-    expect(after!.media.status).toBe('failed');
-    expect(after!.media.error).toBeTruthy();
+    expect(after!.media!.status).toBe('failed');
+    expect(after!.media!.error).toBeTruthy();
   });
 
   it('leaves a fresh processing video Story alone', async () => {
@@ -56,7 +56,7 @@ describe('reconcileStuckStories', () => {
     });
     await reconcileStuckStories();
     const after = await Story.findById(s.id);
-    expect(after!.media.status).toBe('processing');
+    expect(after!.media!.status).toBe('processing');
   });
 
   it('never touches a processing image Story (images finalize synchronously, never go through the transcoder)', async () => {
@@ -67,6 +67,6 @@ describe('reconcileStuckStories', () => {
     });
     await reconcileStuckStories();
     const after = await Story.findById(s.id);
-    expect(after!.media.status).toBe('processing');
+    expect(after!.media!.status).toBe('processing');
   });
 });
