@@ -33,7 +33,16 @@ export type NotificationType =
   // flowing back to the respondent.
   | 'if_i_go_posted'
   | 'if_i_go_response'
-  | 'if_i_go_status_changed';
+  | 'if_i_go_status_changed'
+  // My Weekend (spec §11-§18) — the status-owner side of every private
+  // invite/offer/request kind collapses into one generic type (`data.kind`
+  // distinguishes invite_to_event/buy_ticket/buy_drink/invite_to_table/
+  // request_join_table/request_to_meet/make_plans_together, same grouping
+  // the spec itself uses in §17), the sender's accept/decline notice is a
+  // second generic type, and the Friday nudge is a third.
+  | 'weekend_request_received'
+  | 'weekend_request_responded'
+  | 'weekend_reminder';
 
 export type NotificationRecipientType = 'buyer' | 'vendor';
 
@@ -87,6 +96,9 @@ const notificationSchema = new Schema<INotification>(
         'if_i_go_posted',
         'if_i_go_response',
         'if_i_go_status_changed',
+        'weekend_request_received',
+        'weekend_request_responded',
+        'weekend_reminder',
       ],
       required: true,
     },
@@ -143,6 +155,15 @@ notificationSchema.index(
 notificationSchema.index(
   { recipientId: 1, type: 1, 'data.storyId': 1 },
   { unique: true, partialFilterExpression: { type: 'if_i_go_posted' }, name: 'if_i_go_posted_dedupe' }
+);
+
+// My Weekend weekly reminder (spec §18): "one reminder every week" — one row
+// per (recipient, weekStart), so a sweep that fires more than once on a
+// Friday (see WeekendReminderService — a plain setInterval, not a true cron)
+// can never double-send.
+notificationSchema.index(
+  { recipientId: 1, type: 1, 'data.weekStart': 1 },
+  { unique: true, partialFilterExpression: { type: 'weekend_reminder' }, name: 'weekend_reminder_dedupe' }
 );
 
 export const Notification = model<INotification>('Notification', notificationSchema);
