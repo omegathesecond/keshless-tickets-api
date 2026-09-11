@@ -4,6 +4,7 @@ import { requireProfilePhoto } from '@middleware/requirePhoto.middleware';
 import { SocialProfileController } from '@controllers/socialProfile.controller';
 import { ConsumerReadsController } from '@controllers/consumerReads.controller';
 import { StoryController } from '@controllers/story.controller';
+import { IfIGoController } from '@controllers/ifIGo.controller';
 import { MeetupController } from '@controllers/meetup.controller';
 import { AccountActivityController } from '@controllers/accountActivity.controller';
 
@@ -59,6 +60,21 @@ router.post('/stories/:id/like', authenticateBuyer, StoryController.like);
 router.get('/stories/:id/viewers', authenticateBuyer, StoryController.viewers);
 router.get('/stories/:id/likers', authenticateBuyer, StoryController.likers);
 router.delete('/stories/:id', authenticateBuyer, StoryController.remove);
+// "If I Go…" — an interactive Story type (spec: If I Go…). Buyer-only, so
+// no vendor twin (unlike the plain Story routes above). GET is
+// optionalTicketsAuth: an anonymous viewer can still see public results,
+// gated inside the service by audience/block/expiry rules.
+router.post('/stories/if-i-go', authenticateBuyer, requireProfilePhoto, IfIGoController.create);
+router.post('/stories/:id/if-i-go/finalize', authenticateBuyer, requireProfilePhoto, IfIGoController.finalize);
+router.get('/stories/:id/if-i-go', optionalTicketsAuth, IfIGoController.get);
+router.post('/stories/:id/if-i-go/respond', authenticateBuyer, IfIGoController.respond);
+router.delete('/stories/:id/if-i-go/respond', authenticateBuyer, IfIGoController.removeResponse);
+router.patch('/stories/:id/if-i-go/responses-enabled', authenticateBuyer, IfIGoController.setResponsesEnabled);
+router.get('/stories/:id/if-i-go/respondents', authenticateBuyer, IfIGoController.respondents);
+router.post('/stories/:id/if-i-go/respondents/:respondentId/status', authenticateBuyer, IfIGoController.setResponseStatus);
+router.post('/stories/:id/if-i-go/confirm-ticket', authenticateBuyer, IfIGoController.confirmTicket);
+router.post('/stories/:id/if-i-go/message', authenticateBuyer, IfIGoController.openConversation);
+router.get('/stories/:id/if-i-go/plans', authenticateBuyer, IfIGoController.plans);
 // '/users/search' MUST be registered BEFORE '/users/:username' or "search" is captured as a username.
 router.get('/users/search', authenticateBuyer, SocialProfileController.searchUsers);
 router.get('/users/:username', authenticateBuyer, SocialProfileController.publicProfile);

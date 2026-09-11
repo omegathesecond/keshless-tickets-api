@@ -3,6 +3,8 @@ import { ApiResponseUtil } from '@utils/apiResponse.util';
 import { resolveBuyerFromRequest } from '@utils/buyerRequest.util';
 import { failWithHttpError, HEX24 } from '@utils/controllerHelpers.util';
 import { createStory, deleteStory, finalizeStory, listForViewer, listLikers, listViewers, markSeen, toggleLike } from '@services/story.service';
+import { deleteIfIGoStory } from '@services/ifIGo.service';
+import { Buyer } from '@models/buyer.model';
 import { assertNotSuspended } from '@utils/socialSuspension.util';
 import { isActorAuthorOf, type SocialActor } from '@utils/socialActor.util';
 import { Story } from '@models/story.model';
@@ -147,6 +149,18 @@ export class StoryController {
     const id = req.params['id'] as string;
     if (!HEX24.test(id)) return ApiResponseUtil.validationError(res, 'Invalid story id');
     try {
+      const existing = await Story.findById(id).select('kind');
+      if (existing?.kind === 'if_i_go') {
+        // 'if_i_go' carries its own sibling rows (IfIGoStory/IfIGoResponse —
+        // see @models/ifIGoStory.model) that the generic deleteStory below
+        // has no idea exist, so it's routed to ifIGo.service instead. Always
+        // buyer-only for this kind (see ifIGo.service's scope note).
+        if (actor.type !== 'buyer') return ApiResponseUtil.forbidden(res, 'Not your story');
+        const buyer = await Buyer.findById(actor.id);
+        if (!buyer) return ApiResponseUtil.unauthorized(res, 'Please sign in first');
+        await deleteIfIGoStory(buyer, id);
+        return ApiResponseUtil.success(res, { ok: true });
+      }
       await deleteStory(id, actor);
       return ApiResponseUtil.success(res, { ok: true });
     } catch (error: any) {

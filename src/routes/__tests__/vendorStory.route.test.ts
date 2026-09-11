@@ -60,7 +60,7 @@ describe('Brand stories API (/api/tickets/social/stories)', () => {
       const stored = await Story.findById(res.body.data.storyId);
       expect(stored?.authorType).toBe('vendor');
       expect(String(stored?.authorId)).toBe(String(vendor._id));
-      expect(stored?.media.status).toBe('processing');
+      expect(stored?.media!.status).toBe('processing');
     });
 
     it('401s a buyer token (carries no vendorId)', async () => {

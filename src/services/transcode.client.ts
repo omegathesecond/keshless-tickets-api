@@ -74,7 +74,9 @@ export async function reconcileStuckStories(): Promise<void> {
       await Story.updateOne({ _id: s._id }, { $set: { 'media.status': 'failed', 'media.error': 'transcode timed out' } });
     } else if (started < retryBefore.getTime()) {
       const full = await Story.findById(s._id);
-      if (full) triggerTranscode({ id: full.id, media: [{ rawKey: full.media.rawKey }], collection: 'stories' }).catch((e) => console.error('re-trigger transcode (story) failed:', e?.message));
+      // kind:'video' in the query above guarantees media is present — only
+      // 'if_i_go' Stories can ever have no media (see @models/story.model).
+      if (full?.media) triggerTranscode({ id: full.id, media: [{ rawKey: full.media.rawKey }], collection: 'stories' }).catch((e) => console.error('re-trigger transcode (story) failed:', e?.message));
     }
   }
 }

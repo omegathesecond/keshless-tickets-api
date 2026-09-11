@@ -41,8 +41,8 @@ describe('story.service', () => {
         actor: { type: 'buyer', id: buyerId() }, kind: 'image', ext: 'jpg', contentType: 'image/jpeg',
       });
       expect(uploadUrl).toContain('https://r2.example/put');
-      expect(story.media.status).toBe('processing');
-      expect(story.media.rawKey).toBe('updates/raw/1-abc.jpg');
+      expect(story.media!.status).toBe('processing');
+      expect(story.media!.rawKey).toBe('updates/raw/1-abc.jpg');
       const expiresInMs = story.expiresAt.getTime() - before;
       expect(expiresInMs).toBeGreaterThan(47.9 * 3600 * 1000);
       expect(expiresInMs).toBeLessThan(48.1 * 3600 * 1000);
@@ -51,16 +51,16 @@ describe('story.service', () => {
     it('finalizeStory(image) marks ready immediately with an image url', async () => {
       const { story } = await createStory({ actor: { type: 'buyer', id: buyerId() }, kind: 'image', ext: 'jpg', contentType: 'image/jpeg' });
       const out = await finalizeStory(story.id);
-      expect(out.media.status).toBe('ready');
-      expect(out.media.image?.url).toBe('https://cdn.carrottickets.com/updates/raw/1-abc.jpg');
+      expect(out.media!.status).toBe('ready');
+      expect(out.media!.image?.url).toBe('https://cdn.carrottickets.com/updates/raw/1-abc.jpg');
       expect(mockTriggerTranscode).not.toHaveBeenCalled();
     });
 
     it('finalizeStory(video) sets processingStartedAt and triggers transcode', async () => {
       const { story } = await createStory({ actor: { type: 'buyer', id: buyerId() }, kind: 'video', ext: 'mp4', contentType: 'video/mp4' });
       const out = await finalizeStory(story.id);
-      expect(out.media.status).toBe('processing');
-      expect(out.media.processingStartedAt).toBeInstanceOf(Date);
+      expect(out.media!.status).toBe('processing');
+      expect(out.media!.processingStartedAt).toBeInstanceOf(Date);
       expect(mockTriggerTranscode).toHaveBeenCalledTimes(1);
       // Regression: a video Story MUST tell the transcoder to write its result
       // back to the `stories` collection, not the default `updates` one — see
