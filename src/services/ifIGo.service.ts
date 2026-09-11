@@ -449,6 +449,20 @@ export async function removeIfIGoResponse(buyer: IBuyer, storyId: string): Promi
   await IfIGoResponse.deleteOne({ ifIGoStoryId: poll._id, respondentId: buyer._id });
 }
 
+/**
+ * Creator-only — remove ONE respondent's response entirely (spec §12 "Remove
+ * inappropriate responses"). Mirrors removeIfIGoResponse's delete exactly,
+ * but authorized by poll ownership rather than respondent identity, and 404s
+ * if that respondent never actually responded rather than silently no-op'ing.
+ */
+export async function removeRespondentAsCreator(creator: IBuyer, storyId: string, respondentId: string): Promise<void> {
+  const poll = await IfIGoStory.findOne({ storyId });
+  if (!poll) throw new HttpError(404, 'If I Go… poll not found');
+  if (String(poll.creatorId) !== String(creator._id)) throw new HttpError(403, 'Not your poll');
+  const { deletedCount } = await IfIGoResponse.deleteOne({ ifIGoStoryId: poll._id, respondentId });
+  if (deletedCount === 0) throw new HttpError(404, 'Response not found');
+}
+
 /** Creator-only toggle — spec §12 "disable further responses" without
  *  deleting the Story or its already-collected results. */
 export async function toggleResponses(creator: IBuyer, storyId: string, enabled: boolean): Promise<void> {

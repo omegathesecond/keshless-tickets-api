@@ -9,6 +9,7 @@ import {
   getIfIGoStory,
   respondToIfIGoStory,
   removeIfIGoResponse,
+  removeRespondentAsCreator,
   toggleResponses,
   listRespondents,
   updateResponseStatus,
@@ -132,6 +133,24 @@ export class IfIGoController {
       return ApiResponseUtil.success(res, { respondents });
     } catch (error: any) {
       return failWithHttpError(res, error, 'Failed to load respondents');
+    }
+  }
+
+  /** Creator-only — DELETE /stories/:id/if-i-go/respondents/:respondentId
+   *  removes one respondent's response entirely (spec §12 "Remove
+   *  inappropriate responses"), independent of the self-service removeResponse
+   *  above which only ever touches the caller's own response. */
+  static async removeRespondent(req: Request, res: Response): Promise<any> {
+    const buyer = await resolveBuyerFromRequest(req);
+    if (!buyer) return ApiResponseUtil.unauthorized(res, 'Please sign in first');
+    const id = req.params['id'] as string;
+    const respondentId = req.params['respondentId'] as string;
+    if (!HEX24.test(id) || !HEX24.test(respondentId)) return ApiResponseUtil.validationError(res, 'Invalid id');
+    try {
+      await removeRespondentAsCreator(buyer, id, respondentId);
+      return ApiResponseUtil.success(res, { ok: true });
+    } catch (error: any) {
+      return failWithHttpError(res, error, 'Failed to remove respondent');
     }
   }
 

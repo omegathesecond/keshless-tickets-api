@@ -18,6 +18,7 @@ import {
   getIfIGoStory,
   respondToIfIGoStory,
   removeIfIGoResponse,
+  removeRespondentAsCreator,
   toggleResponses,
   listRespondents,
   updateResponseStatus,
@@ -338,6 +339,26 @@ describe('ifIGo.service', () => {
       // Creator-set status is never visible in public results (still just a count).
       const view = await getIfIGoStory(created.storyId, null);
       expect((view as any).poll.results.find((r: any) => r.key === 'join_table').count).toBe(1);
+    });
+
+    it('removeRespondentAsCreator is creator-only and deletes the respondent\'s entire response', async () => {
+      const creator = await mkBuyer('creator_remove');
+      const event = await mkEvent();
+      const created = await createIfIGoStory(creator, { eventId: String(event._id), options: [{ key: 'buy_ticket' }, { key: 'meet_there' }] });
+      const respondent = await mkBuyer('respondent_remove');
+      await respondToIfIGoStory(respondent, created.storyId, { optionKeys: ['buy_ticket'] });
+
+      const outsider = await mkBuyer('outsider_remove');
+      await expect(removeRespondentAsCreator(outsider, created.storyId, String(respondent._id))).rejects.toThrow(HttpError);
+
+      await removeRespondentAsCreator(creator, created.storyId, String(respondent._id));
+      const rows = await listRespondents(creator, created.storyId);
+      expect(rows).toHaveLength(0);
+      const view = await getIfIGoStory(created.storyId, null);
+      expect((view as any).poll.results.find((r: any) => r.key === 'buy_ticket').count).toBe(0);
+
+      // Removing again (nothing left to remove) fails loudly rather than no-op'ing.
+      await expect(removeRespondentAsCreator(creator, created.storyId, String(respondent._id))).rejects.toThrow(HttpError);
     });
   });
 

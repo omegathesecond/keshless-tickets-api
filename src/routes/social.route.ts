@@ -71,6 +71,7 @@ router.post('/stories/:id/if-i-go/respond', authenticateBuyer, IfIGoController.r
 router.delete('/stories/:id/if-i-go/respond', authenticateBuyer, IfIGoController.removeResponse);
 router.patch('/stories/:id/if-i-go/responses-enabled', authenticateBuyer, IfIGoController.setResponsesEnabled);
 router.get('/stories/:id/if-i-go/respondents', authenticateBuyer, IfIGoController.respondents);
+router.delete('/stories/:id/if-i-go/respondents/:respondentId', authenticateBuyer, IfIGoController.removeRespondent);
 router.post('/stories/:id/if-i-go/respondents/:respondentId/status', authenticateBuyer, IfIGoController.setResponseStatus);
 router.post('/stories/:id/if-i-go/confirm-ticket', authenticateBuyer, IfIGoController.confirmTicket);
 router.post('/stories/:id/if-i-go/message', authenticateBuyer, IfIGoController.openConversation);
