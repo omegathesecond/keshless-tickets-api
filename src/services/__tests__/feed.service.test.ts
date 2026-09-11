@@ -5,6 +5,8 @@ import { Event } from '@models/event.model';
 import { Vendor } from '@models/vendor.model';
 import { Buyer } from '@models/buyer.model';
 import { Follow } from '@models/follow.model';
+import { EventPlan } from '@models/eventPlan.model';
+import { EventPlanMember } from '@models/eventPlanMember.model';
 import { EventStatus } from '@interfaces/event.interface';
 import mongoose from 'mongoose';
 
@@ -233,5 +235,146 @@ describe('feed.service getFeed', () => {
     const eventSlide = items.find((i) => i.type === 'event');
     expect(eventSlide?.['ticketing']).toBe('carrot');
     expect(eventSlide?.['externalTicketUrl']).toBeNull();
+  });
+
+  // Home feed follow-up: "do not use a fixed feed position for Vote cards" /
+  // "vary their position whenever the feed is refreshed". A bare event (no
+  // lineup/outfit) still gets the always-on attending_with/busy questions
+  // (see vote.service.test.ts), so it's eligible for a Vote feed card the
+  // moment it's published within the 7-day activation window.
+  async function seedVoteEligibleEvent() {
+    const now = Date.now();
+    const startTime = new Date(now + 2 * 86400000);
+    return Event.create({
+      vendorId: new mongoose.Types.ObjectId(), name: 'Vote Event', venue: 'V',
+      eventDate: startTime, startTime, endTime: new Date(startTime.getTime() + 3 * 3600000),
+      status: EventStatus.PUBLISHED, publishedAt: new Date(now - 86400000),
+      ticketTypes: [{ name: 'GA', price: 100, quantity: 50 }],
+    });
+  }
+
+  it('varies the Vote card slot across fresh feed loads instead of a fixed position', async () => {
+    for (let i = 0; i < 12; i++) await seedReadyUpdate('u' + i);
+    await seedVoteEligibleEvent();
+
+    const positions = new Set<number>();
+    for (let i = 0; i < 25; i++) {
+      const { items } = await getFeed({ tab: 'for-you', limit: 11 });
+      const idx = items.findIndex((it) => it.type === 'vote');
+      expect(idx).toBeGreaterThanOrEqual(0);
+      positions.add(idx);
+    }
+    expect(positions.size).toBeGreaterThan(1);
+  });
+
+  it('never puts the Vote card in the very first slot of a fresh feed load', async () => {
+    for (let i = 0; i < 12; i++) await seedReadyUpdate('u' + i);
+    await seedVoteEligibleEvent();
+
+    for (let i = 0; i < 15; i++) {
+      const { items } = await getFeed({ tab: 'for-you', limit: 11 });
+      expect(items[0]?.type).not.toBe('vote');
+    }
+  });
+
+  // Home feed follow-up (ticket): "Public Plans can be discovered through
+  // the Home feed" / "publish a plan ... after it is created" / "remove it
+  // immediately if it is changed to Private or cancelled".
+  describe('Event Plan cards (Home feed discoverability follow-up)', () => {
+    async function seedPlan(overrides: Partial<any> = {}) {
+      const suffix = new mongoose.Types.ObjectId().toString().slice(-8);
+      const admin = await Buyer.create({ phone: '+26878400000' + Math.floor(Math.random() * 1000), password: 'password123', name: 'Plan Admin', username: 'plan_' + suffix });
+      const event = await seedEvent('Plan Event ' + suffix);
+      const plan = await EventPlan.create({
+        eventId: event._id, adminId: admin._id, name: 'Pregame squad',
+        description: 'Meet up before doors', visibility: 'public', joinPolicy: 'open', status: 'active',
+        ...overrides,
+      });
+      await EventPlanMember.create({ planId: plan._id, buyerId: admin._id, role: 'admin', status: 'accepted', joinedAt: new Date() });
+      return { plan, admin, event };
+    }
+
+    it('surfaces a public active plan as a plan-type feed slide', async () => {
+      for (let i = 0; i < 20; i++) await seedReadyUpdate('u' + i);
+      const { plan } = await seedPlan();
+
+      let found: any = null;
+      for (let i = 0; i < 20 && !found; i++) {
+        const { items } = await getFeed({ tab: 'for-you', limit: 12 });
+        found = items.find((it) => it.type === 'plan' && it.id === String(plan._id));
+      }
+      expect(found).toBeTruthy();
+      expect(found.visibility).toBe('public');
+      expect(found.name).toBe('Pregame squad');
+      expect(found.admin?.name).toBe('Plan Admin');
+      expect(found.event?.name).toContain('Plan Event');
+      expect(found.memberCount).toBe(1);
+    });
+
+    it('never surfaces a private plan in the feed', async () => {
+      for (let i = 0; i < 10; i++) await seedReadyUpdate('u' + i);
+      const { plan } = await seedPlan({ visibility: 'private' });
+
+      for (let i = 0; i < 10; i++) {
+        const { items } = await getFeed({ tab: 'for-you', limit: 12 });
+        expect(items.some((it) => it.type === 'plan' && it.id === String(plan._id))).toBe(false);
+      }
+    });
+
+    it('never surfaces a cancelled plan in the feed', async () => {
+      for (let i = 0; i < 10; i++) await seedReadyUpdate('u' + i);
+      const { plan } = await seedPlan({ status: 'cancelled', cancelledAt: new Date() });
+
+      for (let i = 0; i < 10; i++) {
+        const { items } = await getFeed({ tab: 'for-you', limit: 12 });
+        expect(items.some((it) => it.type === 'plan' && it.id === String(plan._id))).toBe(false);
+      }
+    });
+
+    it('removes a plan from the feed immediately after it is switched to private (live query, no stale cache)', async () => {
+      for (let i = 0; i < 15; i++) await seedReadyUpdate('u' + i);
+      const { plan } = await seedPlan();
+
+      let seenPublic = false;
+      for (let i = 0; i < 15 && !seenPublic; i++) {
+        const { items } = await getFeed({ tab: 'for-you', limit: 12 });
+        if (items.some((it) => it.type === 'plan' && it.id === String(plan._id))) seenPublic = true;
+      }
+      expect(seenPublic).toBe(true);
+
+      await EventPlan.updateOne({ _id: plan._id }, { $set: { visibility: 'private' } });
+
+      for (let i = 0; i < 10; i++) {
+        const { items } = await getFeed({ tab: 'for-you', limit: 12 });
+        expect(items.some((it) => it.type === 'plan' && it.id === String(plan._id))).toBe(false);
+      }
+    });
+
+    it('events tab never surfaces plan slides — dedicated event browsing only', async () => {
+      await seedReadyUpdate('u1');
+      await seedEvent('E-events-tab');
+      await seedPlan();
+
+      const { items } = await getFeed({ tab: 'events', limit: 12 });
+      expect(items.every((i) => i.type === 'event')).toBe(true);
+    });
+
+    it('includes the small overlapping member-avatar sample and viewer membership status', async () => {
+      for (let i = 0; i < 10; i++) await seedReadyUpdate('u' + i);
+      const { plan, admin } = await seedPlan();
+      const member = await Buyer.create({ phone: '+26878411111', password: 'password123', name: 'Joined Friend', username: 'joined_friend', avatarUrl: 'https://cdn.example.com/a.jpg' });
+      await EventPlanMember.create({ planId: plan._id, buyerId: member._id, role: 'member', status: 'accepted', joinedAt: new Date() });
+
+      let found: any = null;
+      for (let i = 0; i < 20 && !found; i++) {
+        const { items } = await getFeed({ tab: 'for-you', limit: 12, actor: { type: 'buyer', id: String(admin._id) } });
+        found = items.find((it) => it.type === 'plan' && it.id === String(plan._id));
+      }
+      expect(found).toBeTruthy();
+      expect(found.memberCount).toBe(2);
+      expect(found.memberAvatars.length).toBe(2);
+      expect(found.viewer.isAdmin).toBe(true);
+      expect(found.viewer.memberStatus).toBe('accepted');
+    });
   });
 });
