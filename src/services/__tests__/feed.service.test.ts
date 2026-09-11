@@ -437,5 +437,68 @@ describe('feed.service getFeed', () => {
       expect(found.viewer.isAdmin).toBe(true);
       expect(found.viewer.memberStatus).toBe('accepted');
     });
+
+    // Follow-up regression, identical root cause to the Vote-card version
+    // above ('never lets two Vote cards land adjacent across a pagination
+    // boundary'): the interleave pattern buffer is rebuilt from scratch on
+    // EVERY getFeed() call, including a paginated continuation. Pre-fix,
+    // only a fresh load's pattern buffer guarded slot 0 against opening on
+    // an Event Plan card — a continuation request had no memory of what the
+    // previous page ended on, so if page N's last item happened to be a
+    // plan card and page N+1's freshly-shuffled pattern happened to start
+    // with one too, two plan cards would render back-to-back across the
+    // page boundary.
+    //
+    // Deterministic, not statistical, exactly like the Vote version: drives
+    // shuffledWindow()'s Fisher-Yates via a controlled Math.random()
+    // sequence so page 1's window is forced to end on the Plan slot and
+    // page 2's window is forced to (pre-guard) open on it.
+    it('never lets two Event Plan cards land adjacent across a pagination boundary', async () => {
+      for (let i = 0; i < 20; i++) await seedReadyUpdate('u' + i);
+      await seedPlan(); // candidate for page 1's plan slot
+      await seedPlan(); // a DISTINCT plan so page 2 still has a plan candidate once page 1's is cursor-excluded via `p` (plan-seen)
+
+      // shuffledWindow()'s 11-token pool is ['u'x7,'e','e','v','p'] (the 'p'
+      // token is the last one, index 10) and Fisher-Yates runs i = 10 down
+      // to 1, consuming one Math.random() call per i to pick
+      // j = floor(rand*(i+1)):
+      //   pageOneRandoms: i=10, rand=0.15 -> j=1 -> swaps index 10 ('p')
+      //     with index 1 directly, giving
+      //     ['u','p','u','u','u','u','u','e','e','v','u']. Slot 0 isn't
+      //     special, so the fresh-load slot-0 guard never fires, and with
+      //     limit 2 page 1 consumes slots 0 and 1 -> its LAST item is the
+      //     plan card.
+      //   pageTwoRandoms: i=10, rand=0 -> j=0 -> swaps index 10 ('p') into
+      //     index 0 itself, giving
+      //     ['p','u','u','u','u','u','u','e','e','v','u']. With limit 1,
+      //     page 2's only item is exactly this raw slot 0 — 'p' unless the
+      //     continuation guard swaps it away.
+      const NOOP = 0.999999;
+      const pageOneRandoms = [0.15, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP];
+      const pageTwoRandoms = [0, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP];
+      const forcedSequence = [...pageOneRandoms, ...pageTwoRandoms];
+      let callIndex = 0;
+      const randomSpy = jest.spyOn(Math, 'random').mockImplementation(() => {
+        if (callIndex >= forcedSequence.length) throw new Error('feed.service test: Math.random() called more than the forced sequence expects — shuffledWindow() call count assumption broke');
+        return forcedSequence[callIndex++]!;
+      });
+
+      try {
+        const p1 = await getFeed({ tab: 'for-you', limit: 2 });
+        // Sanity check on the controlled setup itself, not the fix: if this
+        // fails, shuffledWindow()'s Fisher-Yates changed shape and the
+        // forced sequence above needs recomputing.
+        expect(p1.items[1]?.type).toBe('plan');
+        expect(p1.nextCursor).toBeTruthy();
+
+        const p2 = await getFeed({ tab: 'for-you', limit: 1, cursor: p1.nextCursor! });
+        // The actual regression guard: page 2's continuation window was
+        // forced to raw-open on 'p' — it must have been swapped away
+        // because page 1 ended on a plan card.
+        expect(p2.items[0]?.type).not.toBe('plan');
+      } finally {
+        randomSpy.mockRestore();
+      }
+    });
   });
 });

@@ -36,8 +36,9 @@ interface FeedOpts { tab: 'for-you' | 'following' | 'events'; cursor?: string; a
  *  call (including a paginated continuation), so without this the slot-0
  *  guard that keeps a fresh load from opening on a Vote card has no memory
  *  of what a continuation request's page just ended on, and two Vote cards
- *  can land back-to-back across the pagination boundary. */
-interface Cursor { e?: number; s?: string[]; v?: string[]; p?: string[]; lv?: boolean; }
+ *  can land back-to-back across the pagination boundary. `lp` ("last was
+ *  plan") is the identical carry-forward for Event Plan cards. */
+interface Cursor { e?: number; s?: string[]; v?: string[]; p?: string[]; lv?: boolean; lp?: boolean; }
 
 function decode(cursor?: string): Cursor { if (!cursor) return {}; try { return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')); } catch { return {}; } }
 function encode(c: Cursor): string { return Buffer.from(JSON.stringify(c)).toString('base64url'); }
@@ -83,9 +84,10 @@ function shuffledWindow(): Slot[] {
  * Vote card at the top of the Home feed"). For a paginated continuation
  * request the buffer is rebuilt from scratch too, so `guardZeroFor` also
  * carries 'v' when the previous page's cursor recorded that IT ended on a
- * Vote card (`cur.lv`) — otherwise this fresh buffer's slot 0 has no memory
- * of the prior page's trailing slot and two Vote cards can land back-to-back
- * across the pagination boundary.
+ * Vote card (`cur.lv`), and likewise 'p' when it ended on an Event Plan card
+ * (`cur.lp`) — otherwise this fresh buffer's slot 0 has no memory of the
+ * prior page's trailing slot and two cards of the same type can land
+ * back-to-back across the pagination boundary.
  */
 function appendWindow(pattern: Slot[], guardZeroFor: ReadonlySet<Slot>): void {
   const win = shuffledWindow();
@@ -309,7 +311,9 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
   const items: FeedSlide[] = [];
   const pattern: Slot[] = [];
   const isFreshLoad = !opts.cursor;
-  const guardZeroFor = new Set<Slot>(isFreshLoad ? (['v', 'p'] as const) : cur.lv ? (['v'] as const) : []);
+  const guardZeroFor = new Set<Slot>(
+    isFreshLoad ? (['v', 'p'] as const) : ([...(cur.lv ? (['v'] as const) : []), ...(cur.lp ? (['p'] as const) : [])] as const),
+  );
   let pi = 0;
   while (items.length < limit && (q.u.length || q.e.length || q.v.length || q.p.length)) {
     if (pi >= pattern.length) appendWindow(pattern, guardZeroFor);
@@ -347,6 +351,10 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
   const consumedPlanIds = items.filter((i) => i.type === 'plan').map((i) => i.id);
   const mergedPlanSeen = [...(cur.p ?? []), ...consumedPlanIds];
   if (mergedPlanSeen.length) next.p = mergedPlanSeen;
+  // Carried to the next page's slot-0 guard (see appendWindow's doc comment)
+  // so a continuation request can't open on an Event Plan card right after
+  // this page's last item was one.
+  if (items[items.length - 1]?.type === 'plan') next.lp = true;
 
   const anyMore = items.length >= limit; // conservative: only advertise more if we filled a page
   return { items, nextCursor: anyMore ? encode(next) : null };
