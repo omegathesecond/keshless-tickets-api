@@ -1,7 +1,7 @@
 import { Ticket } from '@models/ticket.model';
 import { TicketSale } from '@models/ticketSale.model';
 import { Event } from '@models/event.model';
-import { ITicket, ITicketSale, TicketStatus, PaymentMethod, PaymentStatus, SalesChannel } from '@interfaces/ticket.interface';
+import { ITicket, ITicketSale, TicketStatus, PaymentMethod, PaymentStatus, SalesChannel, TicketPdfStatus } from '@interfaces/ticket.interface';
 import { EventStatus, type ITicketType } from '@interfaces/event.interface';
 import { resolveCart, assertSingleAttribution } from '@services/cart.service';
 import type { CartLine } from '@interfaces/cart.interface';
@@ -826,7 +826,7 @@ export class TicketService {
     if (!ticket) {
       throw new Error(`Ticket not found: ${idOrCode}`);
     }
-    if (!isSuperAdmin && ticket.vendorId?.toString() !== vendorId) {
+    if (!isSuperAdmin && (!vendorId || ticket.vendorId?.toString() !== vendorId)) {
       throw new Error('Not authorized to access this ticket');
     }
     return ticket;
@@ -859,8 +859,13 @@ export class TicketService {
     }
 
     // The R2-cached artifact is idempotent — first call renders and uploads,
-    // later calls return the same URL.
+    // later calls return the same URL. A concurrent request can still be
+    // GENERATING (no pdfUrl yet) — refuse to send rather than mailing/texting
+    // a code-only message and reporting it as a success.
     const pdf = await TicketPdfService.ensureTicketPdf(ticket);
+    if (pdf.status !== TicketPdfStatus.READY || !pdf.pdfUrl) {
+      throw new Error('Ticket PDF is still being generated — try again in a moment');
+    }
 
     const summaries = [{
       ticketId: ticket.ticketId,
@@ -868,7 +873,7 @@ export class TicketService {
       eventDate: event.eventDate.toISOString(),
       startTime: event.startTime?.toISOString(),
       venue: event.venue,
-      ...(pdf.pdfUrl ? { pdfUrl: pdf.pdfUrl } : {}),
+      pdfUrl: pdf.pdfUrl,
     }];
 
     if (channel === 'sms') {

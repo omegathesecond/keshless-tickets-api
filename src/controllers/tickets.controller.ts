@@ -12,7 +12,7 @@ import { EventFinancialsService } from '@services/eventFinancials.service';
 import { ExportService } from '@services/export.service';
 import { WalletService } from '@services/wallet.service';
 import { normalizeBandUid } from '@utils/bandUid.util';
-import { normalizePhone } from '@utils/phone.util';
+import { normalizePhone, isValidPhone } from '@utils/phone.util';
 import { Event } from '@models/event.model';
 import { Wallet } from '@models/wallet.model';
 import { Ticket } from '@models/ticket.model';
@@ -977,7 +977,12 @@ export class TicketsController {
 
       const { error, value } = Joi.object({
         name: Joi.string().trim().max(120).optional(),
-        phone: Joi.string().trim().max(32).optional(),
+        phone: Joi.string().trim().max(32).optional().custom((value, helpers) => {
+          if (!isValidPhone(value)) return helpers.error('any.invalid');
+          return value;
+        }).messages({
+          'any.invalid': 'phone must be a valid phone number',
+        }),
         email: Joi.string().trim().email().max(254).optional(),
       }).or('name', 'phone', 'email').validate(req.body);
 
@@ -1048,6 +1053,7 @@ export class TicketsController {
       const msg = err?.message || '';
       if (/not authorized/i.test(msg)) return ApiResponseUtil.error(res, 'You are not allowed to access this ticket', 403);
       if (/no recipient/i.test(msg)) return ApiResponseUtil.error(res, msg, 400);
+      if (/still being generated/i.test(msg)) return ApiResponseUtil.error(res, msg, 409);
       if (/event not found/i.test(msg)) return ApiResponseUtil.error(res, 'Internal error: event data missing for this ticket', 500);
       if (/not found/i.test(msg)) return ApiResponseUtil.error(res, 'Ticket not found', 404);
       console.error('Send single ticket error:', err);

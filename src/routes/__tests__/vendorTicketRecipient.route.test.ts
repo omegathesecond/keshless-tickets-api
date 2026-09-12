@@ -71,3 +71,20 @@ it('404s an unknown ticket', async () => {
   const res = await patch('TKT-NOPE', { name: 'X' });
   expect(res.status).toBe(404);
 });
+
+it('rejects a phone that cannot be a real number, leaving the stored phone unchanged', async () => {
+  const t = await makeTicket(vendorId);
+  const res = await patch(t.ticketId, { phone: '12345' });
+  expect(res.status).toBe(400);
+  const fresh = await Ticket.findById(t._id);
+  expect(fresh!.customerPhone).toBe('+26878422613');
+});
+
+it('accepts a local-format phone and normalizes it', async () => {
+  const t = await makeTicket(vendorId);
+  const res = await patch(t.ticketId, { phone: '76111111' });
+  expect(res.status).toBe(200);
+  expect(res.body.data.ticket.customerPhone).toBe('+26876111111');
+  const fresh = await Ticket.findById(t._id);
+  expect(fresh!.customerPhone).toBe('+26876111111');
+});

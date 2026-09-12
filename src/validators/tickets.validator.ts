@@ -5,6 +5,7 @@ import { EVENT_CATEGORIES } from '@/constants/eventCategories';
 import { TicketStatus, PaymentMethod, PaymentStatus, SalesChannel } from '@interfaces/ticket.interface';
 import { OperatorType } from '@interfaces/vendor.interface';
 import { STARTING_PRICE_UNITS } from '@/constants/serviceCategories';
+import { isValidPhone } from '@utils/phone.util';
 
 // Cross-field guard: a max price, when both are present, must be >= the min.
 const priceRangeCheck = (value: any, helpers: any) => {
@@ -438,7 +439,12 @@ export const sellTicketSchema = Joi.object({
       recipients: Joi.array()
         .items(Joi.object({
           name: Joi.string().trim().max(120).optional(),
-          phone: Joi.string().trim().max(32).optional(),
+          phone: Joi.string().trim().max(32).optional().custom((value, helpers) => {
+            if (!isValidPhone(value)) return helpers.error('any.invalid');
+            return value;
+          }).messages({
+            'any.invalid': 'phone must be a valid phone number',
+          }),
           email: Joi.string().trim().email().max(254).optional(),
         }))
         .optional()

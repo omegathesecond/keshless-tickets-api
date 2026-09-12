@@ -142,3 +142,16 @@ it('includes the ticket PDF link in the message', async () => {
   const [, summaries] = smsSpy.mock.calls[0]!;
   expect(summaries[0].pdfUrl).toBe('https://cdn.example/t.pdf');
 });
+
+it('refuses to send a link-less message while the PDF is still generating, and spends no credit', async () => {
+  jest.spyOn(TicketPdfService, 'ensureTicketPdf')
+    .mockResolvedValue({ status: TicketPdfStatus.GENERATING });
+  const t = await makeTicket(vendorId);
+  t.customerPhone = '+26876111111'; await t.save();
+
+  const res = await send(t.ticketId, { channel: 'sms' });
+
+  expect(res.status).toBe(409);
+  // The point: no credit may be spent on a code-only, link-less message.
+  expect(smsSpy).not.toHaveBeenCalled();
+});

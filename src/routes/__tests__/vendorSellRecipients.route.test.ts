@@ -82,6 +82,23 @@ it('omitting recipients reproduces current behaviour', async () => {
   }
 });
 
+it('rejects a recipient phone that cannot be a real number', async () => {
+  const { eventId, ticketTypeIds } = await seedEventWithTiers(
+    [{ name: 'General', price: 100, quantity: 10 }],
+    { vendorId: new mongoose.Types.ObjectId(vendorId) },
+  );
+  const res = await sell({
+    eventId,
+    items: [{
+      ticketTypeId: ticketTypeIds[0], quantity: 1,
+      recipients: [{ name: 'Thandi', phone: '12345' }],
+    }],
+    paymentMethod: 'cash',
+    customerName: 'Walk-up', customerPhone: '+26878422613',
+  });
+  expect(res.status).toBe(400);
+});
+
 it('rejects more recipients than the line quantity', async () => {
   const { eventId, ticketTypeIds } = await seedEventWithTiers(
     [{ name: 'General', price: 100, quantity: 10 }],
