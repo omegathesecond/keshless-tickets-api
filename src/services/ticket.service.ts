@@ -844,6 +844,15 @@ export class TicketService {
     ticket: ITicket,
     channel: 'sms' | 'email',
   ): Promise<{ sent: boolean }> {
+    // Validate channel against stored contact BEFORE any R2 work — prevents
+    // wasting PDF generation if the ticket has no recipient for this channel.
+    if (channel === 'sms' && !ticket.customerPhone) {
+      throw new Error('This ticket has no recipient phone number');
+    }
+    if (channel === 'email' && !ticket.customerEmail) {
+      throw new Error('This ticket has no recipient email address');
+    }
+
     const event = await Event.findById(ticket.eventId);
     if (!event) {
       throw new Error(`Event not found for ticket: ${ticket.ticketId}`);
@@ -863,16 +872,10 @@ export class TicketService {
     }];
 
     if (channel === 'sms') {
-      if (!ticket.customerPhone) {
-        throw new Error('This ticket has no recipient phone number');
-      }
-      return { sent: await SmsService.sendTicketConfirmation(ticket.customerPhone, summaries) };
+      return { sent: await SmsService.sendTicketConfirmation(ticket.customerPhone!, summaries) };
     }
 
-    if (!ticket.customerEmail) {
-      throw new Error('This ticket has no recipient email address');
-    }
-    return { sent: await EmailService.sendTicketConfirmation(ticket.customerEmail, summaries) };
+    return { sent: await EmailService.sendTicketConfirmation(ticket.customerEmail!, summaries) };
   }
 
   static async getSales(query: GetSalesQuery) {

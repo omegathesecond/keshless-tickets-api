@@ -93,9 +93,22 @@ it('sends by email when that channel is chosen', async () => {
 
 it('refuses SMS when the ticket has no phone, and sends nothing', async () => {
   const t = await makeTicket(vendorId); // no customerPhone
+  const pdfSpy = jest.spyOn(TicketPdfService, 'ensureTicketPdf');
   const res = await send(t.ticketId, { channel: 'sms' });
   expect(res.status).toBe(400);
   expect(smsSpy).not.toHaveBeenCalled();
+  // Crucially: ensureTicketPdf never runs — guard executes before R2 work
+  expect(pdfSpy).not.toHaveBeenCalled();
+});
+
+it('refuses email when the ticket has no email, and sends nothing', async () => {
+  const t = await makeTicket(vendorId); // no customerEmail
+  const pdfSpy = jest.spyOn(TicketPdfService, 'ensureTicketPdf');
+  const res = await send(t.ticketId, { channel: 'email' });
+  expect(res.status).toBe(400);
+  expect(emailSpy).not.toHaveBeenCalled();
+  // Crucially: ensureTicketPdf never runs — guard executes before R2 work
+  expect(pdfSpy).not.toHaveBeenCalled();
 });
 
 it('surfaces a gateway rejection as 502', async () => {
