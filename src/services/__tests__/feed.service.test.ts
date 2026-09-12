@@ -259,7 +259,10 @@ describe('feed.service getFeed', () => {
 
     const positions = new Set<number>();
     for (let i = 0; i < 25; i++) {
-      const { items } = await getFeed({ tab: 'for-you', limit: 11 });
+      // limit:12 matches shuffledWindow()'s 12-token size (7 'u' + 2 'e' +
+      // 'v' + 'p' + 'h') — a full window is drawn every time, guaranteeing
+      // the one Vote candidate seeded above always lands somewhere in it.
+      const { items } = await getFeed({ tab: 'for-you', limit: 12 });
       const idx = items.findIndex((it) => it.type === 'vote');
       expect(idx).toBeGreaterThanOrEqual(0);
       positions.add(idx);
@@ -272,7 +275,7 @@ describe('feed.service getFeed', () => {
     await seedVoteEligibleEvent();
 
     for (let i = 0; i < 15; i++) {
-      const { items } = await getFeed({ tab: 'for-you', limit: 11 });
+      const { items } = await getFeed({ tab: 'for-you', limit: 12 });
       expect(items[0]?.type).not.toBe('vote');
     }
   });
@@ -296,23 +299,25 @@ describe('feed.service getFeed', () => {
     await seedVoteEligibleEvent(); // candidate for page 1's Vote slot
     await seedVoteEligibleEvent(); // a DISTINCT event so page 2 still has a Vote candidate once page 1's is cursor-excluded via `v` (vote-seen)
 
-    // shuffledWindow()'s 11-token pool is ['u'x7,'e','e','v','p'] (the 'v'
-    // token starts at index 9) and Fisher-Yates runs i = 10 down to 1,
+    // shuffledWindow()'s 12-token pool is ['u'x7,'e','e','v','p','h'] (the
+    // 'v' token sits at index 9) and Fisher-Yates runs i = 11 down to 1,
     // consuming one Math.random() call per i to pick j = floor(rand*(i+1)).
     // Picking j = i is a no-op swap; these two sequences hold 'v' fixed
     // except for one deliberate swap:
     //   pageOneRandoms: no-op until i=9, then j=1 -> swaps index 9 ('v')
-    //     with index 1, giving ['u','v','u','u','u','u','u','e','e','u','p'].
-    //     Slot 0 isn't special, so the fresh-load slot-0 guard never fires,
-    //     and with limit 2 page 1 consumes slots 0 and 1 -> its LAST item is
-    //     the Vote card.
+    //     with index 1, giving
+    //     ['u','v','u','u','u','u','u','e','e','u','p','h']. Slot 0 isn't
+    //     special, so the fresh-load slot-0 guard never fires, and with
+    //     limit 2 page 1 consumes slots 0 and 1 -> its LAST item is the
+    //     Vote card.
     //   pageTwoRandoms: no-op until i=9, then j=0 -> swaps index 9 ('v')
-    //     into index 0 itself, giving ['v','u','u','u','u','u','u','e','e','u','p'].
-    //     With limit 1, page 2's only item is exactly this raw slot 0 —
-    //     'v' unless the continuation guard swaps it away.
+    //     into index 0 itself, giving
+    //     ['v','u','u','u','u','u','u','e','e','u','p','h']. With limit 1,
+    //     page 2's only item is exactly this raw slot 0 — 'v' unless the
+    //     continuation guard swaps it away.
     const NOOP = 0.999999;
-    const pageOneRandoms = [0.99, 0.15, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP];
-    const pageTwoRandoms = [0.99, 0, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP];
+    const pageOneRandoms = [NOOP, NOOP, 0.15, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP];
+    const pageTwoRandoms = [NOOP, NOOP, 0, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP];
     const forcedSequence = [...pageOneRandoms, ...pageTwoRandoms];
     let callIndex = 0;
     const randomSpy = jest.spyOn(Math, 'random').mockImplementation(() => {
@@ -436,6 +441,120 @@ describe('feed.service getFeed', () => {
       expect(found.memberAvatars.length).toBe(2);
       expect(found.viewer.isAdmin).toBe(true);
       expect(found.viewer.memberStatus).toBe('accepted');
+    });
+
+    // Follow-up regression, identical root cause to the Vote-card version
+    // above ('never lets two Vote cards land adjacent across a pagination
+    // boundary'): the interleave pattern buffer is rebuilt from scratch on
+    // EVERY getFeed() call, including a paginated continuation. Pre-fix,
+    // only a fresh load's pattern buffer guarded slot 0 against opening on
+    // an Event Plan card — a continuation request had no memory of what the
+    // previous page ended on, so if page N's last item happened to be a
+    // plan card and page N+1's freshly-shuffled pattern happened to start
+    // with one too, two plan cards would render back-to-back across the
+    // page boundary.
+    //
+    // Deterministic, not statistical, exactly like the Vote version: drives
+    // shuffledWindow()'s Fisher-Yates via a controlled Math.random()
+    // sequence so page 1's window is forced to end on the Plan slot and
+    // page 2's window is forced to (pre-guard) open on it.
+    it('never lets two Event Plan cards land adjacent across a pagination boundary', async () => {
+      for (let i = 0; i < 20; i++) await seedReadyUpdate('u' + i);
+      await seedPlan(); // candidate for page 1's plan slot
+      await seedPlan(); // a DISTINCT plan so page 2 still has a plan candidate once page 1's is cursor-excluded via `p` (plan-seen)
+
+      // shuffledWindow()'s 12-token pool is ['u'x7,'e','e','v','p','h'] (the
+      // 'p' token sits at index 10, 'h' is now the last one at index 11) and
+      // Fisher-Yates runs i = 11 down to 1, consuming one Math.random() call
+      // per i to pick j = floor(rand*(i+1)):
+      //   pageOneRandoms: no-op at i=11, then i=10 rand=0.15 -> j=1 ->
+      //     swaps index 10 ('p') with index 1 directly, giving
+      //     ['u','p','u','u','u','u','u','e','e','v','u','h']. Slot 0 isn't
+      //     special, so the fresh-load slot-0 guard never fires, and with
+      //     limit 2 page 1 consumes slots 0 and 1 -> its LAST item is the
+      //     plan card.
+      //   pageTwoRandoms: no-op at i=11, then i=10 rand=0 -> j=0 -> swaps
+      //     index 10 ('p') into index 0 itself, giving
+      //     ['p','u','u','u','u','u','u','e','e','v','u','h']. With limit 1,
+      //     page 2's only item is exactly this raw slot 0 — 'p' unless the
+      //     continuation guard swaps it away.
+      const NOOP = 0.999999;
+      const pageOneRandoms = [NOOP, 0.15, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP];
+      const pageTwoRandoms = [NOOP, 0, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP, NOOP];
+      const forcedSequence = [...pageOneRandoms, ...pageTwoRandoms];
+      let callIndex = 0;
+      const randomSpy = jest.spyOn(Math, 'random').mockImplementation(() => {
+        if (callIndex >= forcedSequence.length) throw new Error('feed.service test: Math.random() called more than the forced sequence expects — shuffledWindow() call count assumption broke');
+        return forcedSequence[callIndex++]!;
+      });
+
+      try {
+        const p1 = await getFeed({ tab: 'for-you', limit: 2 });
+        // Sanity check on the controlled setup itself, not the fix: if this
+        // fails, shuffledWindow()'s Fisher-Yates changed shape and the
+        // forced sequence above needs recomputing.
+        expect(p1.items[1]?.type).toBe('plan');
+        expect(p1.nextCursor).toBeTruthy();
+
+        const p2 = await getFeed({ tab: 'for-you', limit: 1, cursor: p1.nextCursor! });
+        // The actual regression guard: page 2's continuation window was
+        // forced to raw-open on 'p' — it must have been swapped away
+        // because page 1 ended on a plan card.
+        expect(p2.items[0]?.type).not.toBe('plan');
+      } finally {
+        randomSpy.mockRestore();
+      }
+    });
+  });
+
+  // What's Hot This Weekend (spec §1): a single 'hot' slide bundles several
+  // eligible posts for the Home feed's "horizontally scrollable preview".
+  describe("What's Hot This Weekend cards", () => {
+    async function seedHotUpdate(caption: string) {
+      return Update.create({
+        authorType: 'buyer', authorId: new mongoose.Types.ObjectId(), kind: 'image', caption,
+        media: [{ rawKey: 'k', status: 'ready', image: { url: 'u', width: 1, height: 1 } }],
+        feature: 'whats-hot', activityDate: new Date(),
+      });
+    }
+
+    it('includes a hot slide bundling eligible posts, farther down than slot 0', async () => {
+      for (let i = 0; i < 12; i++) await seedReadyUpdate('u' + i);
+      await seedHotUpdate('h1');
+      await seedHotUpdate('h2');
+
+      for (let i = 0; i < 15; i++) {
+        const { items } = await getFeed({ tab: 'for-you', limit: 12 });
+        expect(items[0]?.type).not.toBe('hot');
+        const hotSlide = items.find((it) => it.type === 'hot');
+        if (hotSlide) {
+          const bundled = (hotSlide as any).items as any[];
+          expect(bundled.length).toBeGreaterThan(0);
+          expect(bundled.every((it) => ['h1', 'h2'].includes(it.caption))).toBe(true);
+        }
+      }
+    });
+
+    it('never surfaces a plain (non-whats-hot) post inside a hot slide', async () => {
+      for (let i = 0; i < 12; i++) await seedReadyUpdate('u' + i);
+      await seedHotUpdate('h1');
+      const { items } = await getFeed({ tab: 'for-you', limit: 12 });
+      const hotSlide = items.find((it) => it.type === 'hot') as any;
+      if (hotSlide) {
+        expect((hotSlide.items as any[]).every((it) => it.caption === 'h1')).toBe(true);
+      }
+    });
+
+    it('does not repeat a What\'s Hot post across pages within one session', async () => {
+      for (let i = 0; i < 20; i++) await seedReadyUpdate('u' + i);
+      await seedHotUpdate('h1');
+
+      const p1 = await getFeed({ tab: 'for-you', limit: 12 });
+      const p2 = await getFeed({ tab: 'for-you', limit: 12, cursor: p1.nextCursor! });
+      const hotIdsPage1 = (p1.items.filter((i) => i.type === 'hot') as any[]).flatMap((s) => s.items.map((it: any) => it.id));
+      const hotIdsPage2 = (p2.items.filter((i) => i.type === 'hot') as any[]).flatMap((s) => s.items.map((it: any) => it.id));
+      const overlap = hotIdsPage1.filter((id) => hotIdsPage2.includes(id));
+      expect(overlap).toHaveLength(0);
     });
   });
 });

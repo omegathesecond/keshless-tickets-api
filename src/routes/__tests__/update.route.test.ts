@@ -219,3 +219,166 @@ describe('DELETE /api/public/updates/:id', () => {
     expect(reloaded?.status).toBe('active');
   });
 });
+
+describe('PATCH /api/public/updates/:id (edit caption)', () => {
+  beforeAll(connectTestDb);
+  afterEach(clearTestDb);
+  afterAll(disconnectTestDb);
+
+  const seedUpdate = async (authorId: string, caption = 'original caption') =>
+    Update.create({
+      authorType: 'buyer',
+      authorId,
+      kind: 'image',
+      caption,
+      media: [{ rawKey: 'k', status: 'ready', image: { url: 'u', width: 1, height: 1 } }],
+    });
+
+  const seedVendorUpdate = async (vendorId: string, caption = 'brand post') =>
+    Update.create({
+      authorType: 'vendor',
+      authorId: vendorId,
+      kind: 'image',
+      caption,
+      media: [{ rawKey: 'k', status: 'ready', image: { url: 'u', width: 1, height: 1 } }],
+    });
+
+  it('allows the author to edit their own caption, stamping editedAt and re-deriving hashtags', async () => {
+    const author = await Buyer.create({ phone: PHONE, password: 'secret1', avatarUrl: 'https://cdn.carrottickets.com/test/avatar.jpg', name: 'Author' });
+    const update = await seedUpdate(String(author._id));
+    const originalCreatedAt = update.createdAt;
+
+    const res = await request(app)
+      .patch(`/api/public/updates/${update.id}`)
+      .set('Authorization', `Bearer ${signBuyerToken(PHONE)}`)
+      .send({ caption: 'updated caption #music' })
+      .expect(200);
+
+    expect(res.body.data.caption).toBe('updated caption #music');
+    expect(res.body.data.editedAt).toBeTruthy();
+
+    const reloaded = await Update.findById(update.id);
+    expect(reloaded?.caption).toBe('updated caption #music');
+    expect(reloaded?.hashtags).toEqual(['music']);
+    expect(reloaded?.editedAt).toBeTruthy();
+    // Original publish date and feed position are untouched by an edit.
+    expect(reloaded?.createdAt.toISOString()).toBe(originalCreatedAt.toISOString());
+  });
+
+  it('allows clearing the caption entirely', async () => {
+    const author = await Buyer.create({ phone: PHONE, password: 'secret1', avatarUrl: 'https://cdn.carrottickets.com/test/avatar.jpg', name: 'Author' });
+    const update = await seedUpdate(String(author._id));
+
+    await request(app)
+      .patch(`/api/public/updates/${update.id}`)
+      .set('Authorization', `Bearer ${signBuyerToken(PHONE)}`)
+      .send({ caption: '' })
+      .expect(200);
+
+    const reloaded = await Update.findById(update.id);
+    expect(reloaded?.caption).toBe('');
+    expect(reloaded?.hashtags).toEqual([]);
+  });
+
+  it('allows a vendor to edit their own brand post caption', async () => {
+    const vendorId = new mongoose.Types.ObjectId();
+    const update = await seedVendorUpdate(String(vendorId));
+
+    const res = await request(app)
+      .patch(`/api/public/updates/${update.id}`)
+      .set('Authorization', `Bearer ${signVendorToken(String(vendorId))}`)
+      .send({ caption: 'new brand caption' })
+      .expect(200);
+    expect(res.body.data.caption).toBe('new brand caption');
+  });
+
+  it('allows a super-admin to edit a caption they did not author', async () => {
+    const author = await Buyer.create({ phone: PHONE, password: 'secret1', avatarUrl: 'https://cdn.carrottickets.com/test/avatar.jpg', name: 'Author' });
+    const update = await seedUpdate(String(author._id));
+
+    await request(app)
+      .patch(`/api/public/updates/${update.id}`)
+      .set('Authorization', `Bearer ${signSuperAdminToken()}`)
+      .send({ caption: 'moderated caption' })
+      .expect(200);
+
+    const reloaded = await Update.findById(update.id);
+    expect(reloaded?.caption).toBe('moderated caption');
+  });
+
+  it('forbids a different buyer (non-author, non-admin) from editing', async () => {
+    const author = await Buyer.create({ phone: PHONE, password: 'secret1', avatarUrl: 'https://cdn.carrottickets.com/test/avatar.jpg', name: 'Author' });
+    const NON_AUTHOR_PHONE = '+26876000002';
+    await Buyer.create({ phone: NON_AUTHOR_PHONE, password: 'secret1', avatarUrl: 'https://cdn.carrottickets.com/test/avatar.jpg', name: 'Rando' });
+    const update = await seedUpdate(String(author._id));
+
+    await request(app)
+      .patch(`/api/public/updates/${update.id}`)
+      .set('Authorization', `Bearer ${signBuyerToken(NON_AUTHOR_PHONE)}`)
+      .send({ caption: 'hijacked' })
+      .expect(403);
+
+    const reloaded = await Update.findById(update.id);
+    expect(reloaded?.caption).toBe('original caption');
+  });
+
+  it("forbids a vendor from editing a DIFFERENT brand's post", async () => {
+    const author = new mongoose.Types.ObjectId();
+    const other = new mongoose.Types.ObjectId();
+    const update = await seedVendorUpdate(String(author));
+
+    await request(app)
+      .patch(`/api/public/updates/${update.id}`)
+      .set('Authorization', `Bearer ${signVendorToken(String(other))}`)
+      .send({ caption: 'hijacked' })
+      .expect(403);
+  });
+
+  it('denies an anonymous request (no Authorization header)', async () => {
+    const author = await Buyer.create({ phone: PHONE, password: 'secret1', avatarUrl: 'https://cdn.carrottickets.com/test/avatar.jpg', name: 'Author' });
+    const update = await seedUpdate(String(author._id));
+
+    await request(app)
+      .patch(`/api/public/updates/${update.id}`)
+      .send({ caption: 'hijacked' })
+      .expect(403);
+
+    const reloaded = await Update.findById(update.id);
+    expect(reloaded?.caption).toBe('original caption');
+  });
+
+  it('400s a caption over the 500-char limit — the same limit create() enforces', async () => {
+    const author = await Buyer.create({ phone: PHONE, password: 'secret1', avatarUrl: 'https://cdn.carrottickets.com/test/avatar.jpg', name: 'Author' });
+    const update = await seedUpdate(String(author._id));
+
+    await request(app)
+      .patch(`/api/public/updates/${update.id}`)
+      .set('Authorization', `Bearer ${signBuyerToken(PHONE)}`)
+      .send({ caption: 'x'.repeat(501) })
+      .expect(400);
+  });
+
+  it('400s a missing caption field', async () => {
+    const author = await Buyer.create({ phone: PHONE, password: 'secret1', avatarUrl: 'https://cdn.carrottickets.com/test/avatar.jpg', name: 'Author' });
+    const update = await seedUpdate(String(author._id));
+
+    await request(app)
+      .patch(`/api/public/updates/${update.id}`)
+      .set('Authorization', `Bearer ${signBuyerToken(PHONE)}`)
+      .send({})
+      .expect(400);
+  });
+
+  it('404s a removed post', async () => {
+    const author = await Buyer.create({ phone: PHONE, password: 'secret1', avatarUrl: 'https://cdn.carrottickets.com/test/avatar.jpg', name: 'Author' });
+    const update = await seedUpdate(String(author._id));
+    update.status = 'removed';
+    await update.save();
+
+    await request(app)
+      .patch(`/api/public/updates/${update.id}`)
+      .set('Authorization', `Bearer ${signBuyerToken(PHONE)}`)
+      .send({ caption: 'x' })
+      .expect(404);
+  });
+});

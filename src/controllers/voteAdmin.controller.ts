@@ -16,7 +16,7 @@ export class VoteAdminController {
       const preview = await previewVote(req.params['eventId'] as string, ticketsUser.vendorId, !!ticketsUser.isSuperAdmin);
       return ApiResponseUtil.success(res, preview);
     } catch (error: any) {
-      return failWithHttpError(res, error, 'Failed to load Vote preview');
+      return failWithHttpError(res, error, 'Failed to load Attendance Status preview');
     }
   }
 
@@ -27,7 +27,7 @@ export class VoteAdminController {
       const summary = await getOrganizerSummary(req.params['eventId'] as string, ticketsUser.vendorId, !!ticketsUser.isSuperAdmin);
       return ApiResponseUtil.success(res, summary);
     } catch (error: any) {
-      return failWithHttpError(res, error, 'Failed to load Vote summary');
+      return failWithHttpError(res, error, 'Failed to load Response Results');
     }
   }
 

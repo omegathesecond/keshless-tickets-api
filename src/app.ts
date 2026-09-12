@@ -53,6 +53,7 @@ import vendorSocialRoutes from '@routes/vendorSocial.route';
 import vendorDmRoutes from '@routes/vendorDm.route';
 import eventPlanRoutes from '@routes/eventPlan.route';
 import weekendRoutes from '@routes/weekend.route';
+import whatsHotRoutes from '@routes/whatsHot.route';
 
 // Realtime bus
 import { ensureAdapterCollection } from '@/realtime/adapterCollection';
@@ -169,6 +170,7 @@ app.use('/api/reseller', resellerRoutes);
 app.use('/api/admin', resellerAdminRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/public/updates', updateRoutes);          // Buyer updates (Discover feed) - mounted before the broader /api/public below
+app.use('/api/public/whats-hot', whatsHotRoutes);      // What's Hot This Weekend See All page - mounted before the broader /api/public below
 app.use('/api/public', publicRoutes);                  // Public routes - no auth required
 app.use('/api/public/purchase/peach-card', cardRoutes);      // Peach card webhook (unauthenticated)
 app.use('/api/public/purchase/deltapay', deltapayRoutes);    // DeltaPay return + session callback (unauthenticated)

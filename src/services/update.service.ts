@@ -5,7 +5,8 @@ import { Buyer } from '@models/buyer.model';
 import { updatesR2 } from '@utils/updatesR2';
 import { extractHashtags } from '@utils/hashtags.util';
 import { triggerTranscode } from '@services/transcode.client';
-import type { UpdateAuthorType, UpdateKind } from '@interfaces/update.interface';
+import type { UpdateAuthorType, UpdateFeature, UpdateKind } from '@interfaces/update.interface';
+import type { WhatsHotCategory } from '@/constants/whatsHotCategories';
 import { isActorAuthorOf, type SocialActor } from '@utils/socialActor.util';
 import { toggleReactionGeneric } from '@services/reactions.service';
 import { AccountActivityService } from '@services/accountActivity.service';
@@ -17,6 +18,10 @@ interface CreateInput {
   caption: string;
   eventId?: string;
   items: { ext: string; contentType: string }[];
+  feature?: UpdateFeature;
+  hotCategory?: WhatsHotCategory;
+  venue?: string;
+  activityDate?: Date;
 }
 
 export async function createUpdate(input: CreateInput): Promise<{ update: IUpdate; uploads: { index: number; uploadUrl: string }[] }> {
@@ -33,8 +38,46 @@ export async function createUpdate(input: CreateInput): Promise<{ update: IUpdat
     hashtags: extractHashtags(input.caption),
     eventId: input.eventId,
     media: prepared.map((p) => ({ rawKey: p.rawKey, status: 'processing' })),
+    feature: input.feature ?? null,
+    hotCategory: input.hotCategory ?? null,
+    venue: input.venue ?? null,
+    activityDate: input.activityDate ?? null,
   });
   return { update, uploads: prepared.map((p) => ({ index: p.index, uploadUrl: p.uploadUrl })) };
+}
+
+export interface EditUpdateInput {
+  caption?: string;
+  hotCategory?: WhatsHotCategory;
+  venue?: string;
+  activityDate?: Date;
+}
+
+/**
+ * Content owners editing a published post "without re-uploading the media"
+ * (What's Hot spec §5) — media/eventId/feature are immutable here; only the
+ * caption and, for a What's Hot post, its venue/category/activityDate.
+ * `caption` re-derives hashtags the same way createUpdate does, so an edit
+ * that adds/removes a `#tag` stays consistent with topic/hashtag lookups,
+ * and stamps `editedAt` so every surface can show an "Edited" label.
+ * Hot-field edits alone don't touch `editedAt` — the caption itself is
+ * unchanged, so there's nothing to flag as edited.
+ */
+export async function editUpdate(id: string, input: EditUpdateInput): Promise<IUpdate | null> {
+  const update = await Update.findById(id);
+  if (!update) return null;
+  if (input.caption !== undefined) {
+    update.caption = input.caption;
+    update.hashtags = extractHashtags(input.caption);
+    update.editedAt = new Date();
+  }
+  if (update.feature === 'whats-hot') {
+    if (input.hotCategory !== undefined) update.hotCategory = input.hotCategory;
+    if (input.venue !== undefined) update.venue = input.venue;
+    if (input.activityDate !== undefined) update.activityDate = input.activityDate;
+  }
+  await update.save();
+  return update;
 }
 
 export async function finalizeUpdate(id: string): Promise<IUpdate> {
@@ -137,7 +180,7 @@ export class UpdateService {
         : { type: 'buyer', id: String(u.authorId), name: bMap.get(String(u.authorId))?.name ?? null, username: bMap.get(String(u.authorId))?.username ?? null, avatarUrl: bMap.get(String(u.authorId))?.avatarUrl ?? null };
       return {
         type: 'update', id: String(u._id), sortAt: u.createdAt.toISOString(),
-        kind: u.kind, caption: u.caption, media: u.media,
+        kind: u.kind, caption: u.caption, editedAt: u.editedAt ? u.editedAt.toISOString() : null, media: u.media,
         likeCount: u.likeCount, saveCount: u.saveCount, shareCount: u.shareCount, viewCount: u.viewCount ?? 0,
         eventId: u.eventId ? String(u.eventId) : null, author,
         viewerReactions: reactions[String(u._id)] ?? { liked: false, saved: false },
