@@ -4,7 +4,7 @@ import { Update } from '@models/update.model';
 import {
   weekendRecapCandidates,
   rankWeekendRecapCandidates,
-  buildWeekendRecapFeedSlides,
+  buildWeekendRecapSectionSlide,
   listWeekendRecaps,
   pickWeekendRecapLabel,
   WEEKEND_RECAP_LABELS,
@@ -84,15 +84,22 @@ describe('weekendRecap.service', () => {
     });
   });
 
-  describe('buildWeekendRecapFeedSlides', () => {
-    it('produces weekendRecap-typed slides with a stable label and seeAll flag', async () => {
-      const doc = await seedRecap('r1');
-      const slides = await buildWeekendRecapFeedSlides([doc], null);
-      expect(slides).toHaveLength(1);
-      expect(slides[0].type).toBe('weekendRecap');
-      expect(slides[0].seeAll).toBe(true);
-      expect(WEEKEND_RECAP_LABELS).toContain(slides[0].label);
-      expect(slides[0].label).toBe(pickWeekendRecapLabel(String(doc._id)));
+  describe('buildWeekendRecapSectionSlide', () => {
+    it('bundles every candidate post into ONE weekendRecap section slide with a stable label and seeAll flag', async () => {
+      const doc1 = await seedRecap('r1');
+      const doc2 = await seedRecap('r2');
+      const section = await buildWeekendRecapSectionSlide([doc1, doc2], null);
+      expect(section.type).toBe('weekendRecap');
+      expect(section.seeAll).toBe(true);
+      expect(WEEKEND_RECAP_LABELS).toContain(section.label);
+      expect(section.label).toBe(pickWeekendRecapLabel(String(doc1._id)));
+      expect(section.posts).toHaveLength(2);
+      expect(section.posts.map((p: any) => p.id)).toEqual([String(doc1._id), String(doc2._id)]);
+      expect(section.posts[0].type).toBe('update');
+    });
+
+    it('returns null for an empty candidate list', async () => {
+      expect(await buildWeekendRecapSectionSlide([], null)).toBeNull();
     });
   });
 

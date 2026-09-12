@@ -501,4 +501,66 @@ describe('feed.service getFeed', () => {
       }
     });
   });
+
+  describe('Weekend Recap section cards', () => {
+    async function seedRecapPost(caption: string) {
+      return Update.create({
+        authorType: 'buyer', authorId: new mongoose.Types.ObjectId(), kind: 'image', category: 'weekend_recap', caption,
+        media: [{ rawKey: 'k', status: 'ready', image: { url: 'u', width: 1, height: 1 } }],
+      });
+    }
+
+    it('surfaces a weekendRecap section slide bundling every candidate post', async () => {
+      for (let i = 0; i < 15; i++) await seedReadyUpdate('u' + i);
+      await seedRecapPost('r1');
+      await seedRecapPost('r2');
+
+      let found: any = null;
+      for (let i = 0; i < 20 && !found; i++) {
+        const { items } = await getFeed({ tab: 'for-you', limit: 12 });
+        found = items.find((it) => it.type === 'weekendRecap');
+      }
+      expect(found).toBeTruthy();
+      expect(found.seeAll).toBe(true);
+      expect(found.posts.map((p: any) => p.caption).sort()).toEqual(['r1', 'r2']);
+    });
+
+    it('never surfaces a general (non-recap) post inside the weekendRecap section', async () => {
+      for (let i = 0; i < 10; i++) await seedReadyUpdate('u' + i);
+      await seedRecapPost('r1');
+
+      for (let i = 0; i < 15; i++) {
+        const { items } = await getFeed({ tab: 'for-you', limit: 12 });
+        const section = items.find((it) => it.type === 'weekendRecap');
+        if (section) expect(section.posts.every((p: any) => p.caption === 'r1')).toBe(true);
+      }
+    });
+
+    it('events tab never surfaces a weekendRecap section — dedicated event browsing only', async () => {
+      await seedReadyUpdate('u1');
+      await seedEvent('E-events-tab-2');
+      await seedRecapPost('r1');
+
+      const { items } = await getFeed({ tab: 'events', limit: 12 });
+      expect(items.every((i) => i.type === 'event')).toBe(true);
+    });
+
+    it("doesn't repeatedly bundle the same recap post across pages this session", async () => {
+      for (let i = 0; i < 15; i++) await seedReadyUpdate('u' + i);
+      await seedRecapPost('only-recap');
+
+      const seenTwice: boolean[] = [];
+      let cursor: string | null = null;
+      for (let i = 0; i < 8; i++) {
+        const { items, nextCursor } = await getFeed({ tab: 'for-you', limit: 4, cursor: cursor ?? undefined });
+        const section = items.find((it) => it.type === 'weekendRecap');
+        if (section) seenTwice.push(section.posts.some((p: any) => p.caption === 'only-recap'));
+        cursor = nextCursor;
+        if (!cursor) break;
+      }
+      // The single recap post can appear at most once across the whole
+      // paginated walk (cur.wr excludes it from every subsequent page).
+      expect(seenTwice.filter(Boolean).length).toBeLessThanOrEqual(1);
+    });
+  });
 });

@@ -15,7 +15,12 @@ import type { SocialActor } from '@utils/socialActor.util';
 import { buildEventCardFields } from '@utils/eventCard.util';
 import { getVoteFeedCard } from '@services/vote.service';
 import { EventPlanService } from '@services/eventPlan.service';
-import { weekendRecapCandidates, rankWeekendRecapCandidates, buildWeekendRecapFeedSlides } from '@services/weekendRecap.service';
+import { weekendRecapCandidates, rankWeekendRecapCandidates, buildWeekendRecapSectionSlide } from '@services/weekendRecap.service';
+
+/** Posts bundled into one Weekend Recap Home-feed section — a small rail,
+ *  not a single card, per the spec's "swipeable cards (mobile) / row with
+ *  navigation arrows (desktop)" requirement. */
+const WEEKEND_RECAP_SECTION_SIZE = 5;
 
 export type FeedSlide =
   | { type: 'update'; id: string; sortAt: string; [k: string]: any }
@@ -319,19 +324,21 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
     for (const card of cards) planSlides.push(card as FeedSlide);
   }
 
-  // Weekend Recap section cards (Home-feed placement spec) — same two
-  // personal-scroll tabs as Vote/Plan, same ~1-in-11 slot frequency, and
-  // "don't repeatedly show the same content during one browsing session"
-  // via `cur.wr`, identical mechanism. "Prioritize ... Sunday through
-  // Tuesday" happens inside rankWeekendRecapCandidates (which posts get
-  // picked), not by changing how often the slot itself appears.
+  // Weekend Recap section (Home-feed placement spec) — ONE feed slide
+  // bundling up to WEEKEND_RECAP_SECTION_SIZE posts (a rail, not a single
+  // card), same two personal-scroll tabs as Vote/Plan, same ~1-in-11 slot
+  // frequency, and "don't repeatedly show the same content during one
+  // browsing session" via `cur.wr` (every bundled post id, not just the
+  // section's own synthetic id — see the cursor bookkeeping below).
+  // "Prioritize ... Sunday through Tuesday" happens inside
+  // rankWeekendRecapCandidates (which posts get picked), not by changing how
+  // often the slot itself appears.
   const wrSlides: FeedSlide[] = [];
   if (opts.tab === 'for-you' || opts.tab === 'following') {
-    const wrBudget = Math.max(1, Math.ceil(limit / 11));
-    const raw = await weekendRecapCandidates(wrBudget, cur.wr ?? [], opts.tab === 'for-you');
-    const ranked = rankWeekendRecapCandidates(raw, wrBudget);
-    const cards = await buildWeekendRecapFeedSlides(ranked, opts.actor ?? null);
-    for (const card of cards) wrSlides.push(card as FeedSlide);
+    const raw = await weekendRecapCandidates(WEEKEND_RECAP_SECTION_SIZE, cur.wr ?? [], opts.tab === 'for-you');
+    const ranked = rankWeekendRecapCandidates(raw, WEEKEND_RECAP_SECTION_SIZE);
+    const section = await buildWeekendRecapSectionSlide(ranked, opts.actor ?? null);
+    if (section) wrSlides.push(section as FeedSlide);
   }
 
   // ---- interleave by a freshly-shuffled pattern, dropping dry slots ----
@@ -386,7 +393,10 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
   // this page's last item was one.
   if (items[items.length - 1]?.type === 'plan') next.lp = true;
 
-  const consumedRecapIds = items.filter((i) => i.type === 'weekendRecap').map((i) => i.id);
+  // Excludes every INDIVIDUAL post bundled into a consumed section (not the
+  // section's own synthetic `wr-<id>` id) — otherwise the same posts could
+  // resurface in a later page's section.
+  const consumedRecapIds = items.filter((i) => i.type === 'weekendRecap').flatMap((i) => (i['posts'] as { id: string }[]).map((p) => p.id));
   const mergedRecapSeen = [...(cur.wr ?? []), ...consumedRecapIds];
   if (mergedRecapSeen.length) next.wr = mergedRecapSeen;
   // Carried to the next page's slot-0 guard, same reasoning as lv/lp above.

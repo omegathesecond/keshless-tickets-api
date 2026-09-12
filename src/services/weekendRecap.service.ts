@@ -50,13 +50,25 @@ export function rankWeekendRecapCandidates(docs: IUpdate[], limit: number, now: 
   return [...boosted, ...rest].slice(0, limit);
 }
 
-/** Feed-slide shape for the Home feed's interleaved Weekend Recap slot —
- *  the ordinary update-slide DTO (via UpdateService.buildUpdateSlides, so
- *  it never drifts from what Discover/profile/event pages render) plus a
- *  rotating display label and the See-All entry-point flag. */
-export async function buildWeekendRecapFeedSlides(docs: IUpdate[], actor: SocialActor | null): Promise<any[]> {
-  const slides = await UpdateService.buildUpdateSlides(docs, actor);
-  return slides.map((s) => ({ ...s, type: 'weekendRecap', label: pickWeekendRecapLabel(s.id), seeAll: true }));
+/**
+ * ONE Home-feed slide bundling several ranked Weekend Recap posts — a
+ * "section" (mobile: swipeable cards; desktop: a row with nav arrows), not
+ * a single post per slot like Vote/Event Plan. Each bundled post is the
+ * ordinary update-slide DTO (via UpdateService.buildUpdateSlides, so it
+ * never drifts from what Discover/profile/event pages render). Returns null
+ * for an empty candidate list — callers must not push an empty section.
+ */
+export async function buildWeekendRecapSectionSlide(docs: IUpdate[], actor: SocialActor | null): Promise<any | null> {
+  if (docs.length === 0) return null;
+  const posts = await UpdateService.buildUpdateSlides(docs, actor);
+  return {
+    type: 'weekendRecap',
+    id: `wr-${posts[0]!.id}`,
+    sortAt: posts[0]!.sortAt,
+    label: pickWeekendRecapLabel(posts[0]!.id),
+    seeAll: true,
+    posts,
+  };
 }
 
 export type WeekendRecapSort = 'recommended' | 'latest' | 'most_viewed' | 'most_liked';
