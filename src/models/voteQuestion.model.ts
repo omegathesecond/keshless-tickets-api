@@ -19,9 +19,13 @@ export interface IVoteOption {
  * satisfies "once responses have started, do not change the questions or
  * available options" without needing a separate lock flag.
  *
- * Canonical display order (see vote.service#KIND_DISPLAY_ORDER) is: attend,
+ * Canonical display order (see vote.service#KIND_DISPLAY_ORDER) is:
  * attending_with, busy, bump_into, cup, then the event-conditional
- * artist/song/outfit questions.
+ * artist/song/outfit questions. 'attend' remains a valid persisted kind only
+ * for events that materialized it before the client removed that question —
+ * ensureVoteQuestions filters it out of every read path so it never
+ * displays or contributes to results anymore; no new 'attend' row is ever
+ * created.
  *
  * 'song' questions carry NO options here — suggestions are user-submitted
  * (see @models/songSuggestion.model) and are the response targets instead.

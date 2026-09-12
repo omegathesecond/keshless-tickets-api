@@ -40,10 +40,10 @@ async function seedEvent(opts: { startInDays: number; publishedDaysAgo: number; 
 describe('deriveQuestionDefinitions', () => {
   it('only includes gated questions when the event actually carries their data', () => {
     const bare = deriveQuestionDefinitions({ lineup: undefined, outfitThemeOptions: undefined, category: 'Other' as any });
-    expect(bare.map((d) => d.kind)).toEqual(['attend', 'attending_with', 'busy', 'bump_into', 'cup']);
+    expect(bare.map((d) => d.kind)).toEqual(['attending_with', 'busy', 'bump_into', 'cup']);
 
     const full = deriveQuestionDefinitions({ lineup: ['DJ Nova', 'MC Rae'], outfitThemeOptions: ['White Party', 'Neon'], category: 'Music' as any });
-    expect(full.map((d) => d.kind)).toEqual(['attend', 'attending_with', 'busy', 'bump_into', 'cup', 'artist', 'song', 'outfit']);
+    expect(full.map((d) => d.kind)).toEqual(['attending_with', 'busy', 'bump_into', 'cup', 'artist', 'song', 'outfit']);
     expect(full.find((d) => d.kind === 'artist')!.options.map((o) => o.label)).toEqual(['DJ Nova', 'MC Rae']);
   });
 
@@ -212,7 +212,6 @@ describe('vote.service', () => {
     const event = await seedEvent({ startInDays: 3, publishedDaysAgo: 4, lineup: ['DJ Nova'], outfitThemeOptions: ['Neon'], category: 'Music' });
     const payload = await getVotePayload(String(event._id), null);
     expect(payload.questions.map((q) => q.kind)).toEqual([
-      'attend',
       'attending_with',
       'busy',
       'bump_into',
@@ -224,35 +223,60 @@ describe('vote.service', () => {
   });
 
   it('sorts questions canonically even when a legacy row was persisted with a stale `order` value', async () => {
-    // Simulates data materialized before 'attend'/'bump_into'/'cup' existed —
-    // 'busy' persisted with order 1 (once second-from-last), 'attending_with'
-    // with order 0 — and confirms display order still follows KIND_DISPLAY_ORDER,
+    // Simulates data materialized before 'bump_into'/'cup' existed — 'busy'
+    // persisted with order 1 (once second-from-last), 'attending_with' with
+    // order 0 — and confirms display order still follows KIND_DISPLAY_ORDER,
     // not the stored field, so no backfill migration is required.
     const event = await seedEvent({ startInDays: 3, publishedDaysAgo: 4 });
     await VoteQuestion.create({ eventId: event._id, kind: 'busy', prompt: 'How busy do you expect the event to be?', order: 1, options: [] });
     await VoteQuestion.create({ eventId: event._id, kind: 'attending_with', prompt: 'Who are you attending with?', order: 0, options: [] });
 
     const payload = await getVotePayload(String(event._id), null);
-    expect(payload.questions.map((q) => q.kind)).toEqual(['attend', 'attending_with', 'busy', 'bump_into', 'cup']);
+    expect(payload.questions.map((q) => q.kind)).toEqual(['attending_with', 'busy', 'bump_into', 'cup']);
   });
 
-  it('accepts a vote for the new attend and cup questions with their spec-defined option keys', async () => {
+  it('accepts a vote for the cup question with its spec-defined option keys, and never materializes a new attend question', async () => {
     const event = await seedEvent({ startInDays: 3, publishedDaysAgo: 4 });
     const { Buyer } = await import('@models/buyer.model');
     const a = await Buyer.create({ phone: '+26878400011', password: 'secret1', username: 'voter_i' });
     const actor = { type: 'buyer' as const, id: String(a._id) };
 
     const payload = await getVotePayload(String(event._id), actor);
-    const attendQ = payload.questions.find((q) => q.kind === 'attend')!;
-    expect(attendQ.options.map((o) => o.key)).toEqual(['going', 'maybe', 'cant_go']);
+    expect(payload.questions.map((q) => q.kind)).not.toContain('attend');
+    expect(await VoteQuestion.countDocuments({ eventId: event._id, kind: 'attend' })).toBe(0);
+
     const cupQ = payload.questions.find((q) => q.kind === 'cup')!;
     expect(cupQ.options.map((o) => o.key)).toEqual(['green', 'yellow', 'red']);
     const bumpQ = payload.questions.find((q) => q.kind === 'bump_into')!;
     expect(bumpQ.options.map((o) => o.label)).toContain('My ex');
 
-    const afterAttend = await castVote(String(event._id), attendQ.id, actor, 'going');
-    expect(afterAttend.viewerSelection).toBe('going');
     const afterCup = await castVote(String(event._id), cupQ.id, actor, 'green');
     expect(afterCup.viewerSelection).toBe('green');
+  });
+
+  it('hides a legacy persisted attend question and its results from every read path, and rejects casting a vote on it', async () => {
+    const event = await seedEvent({ startInDays: 3, publishedDaysAgo: 4 });
+    const legacyAttend = await VoteQuestion.create({
+      eventId: event._id,
+      kind: 'attend',
+      prompt: 'Are you planning to attend?',
+      order: 0,
+      options: [
+        { key: 'going', label: "I'm going" },
+        { key: 'maybe', label: 'Maybe' },
+        { key: 'cant_go', label: "I can't go" },
+      ],
+    });
+    const { Buyer } = await import('@models/buyer.model');
+    const a = await Buyer.create({ phone: '+26878400012', password: 'secret1', username: 'voter_j' });
+    const actor = { type: 'buyer' as const, id: String(a._id) };
+    await VoteResponse.create({ questionId: legacyAttend._id, eventId: event._id, actorType: 'buyer', actorId: String(a._id), optionKey: 'going' });
+
+    const payload = await getVotePayload(String(event._id), actor);
+    expect(payload.questions.map((q) => q.kind)).not.toContain('attend');
+    expect(payload.questions[0]!.kind).toBe('attending_with'); // now first, per the updated order
+
+    await expect(castVote(String(event._id), String(legacyAttend._id), actor, 'maybe')).rejects.toMatchObject({ statusCode: 404 });
+    expect(await VoteResponse.countDocuments({ questionId: legacyAttend._id })).toBe(1); // pre-existing response untouched
   });
 });

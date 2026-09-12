@@ -11,12 +11,6 @@ import { assertActorNotSuspended } from '@services/socialAuthor.service';
 import { HttpError } from '@utils/httpError.util';
 import type { SocialActor } from '@utils/socialActor.util';
 
-const ATTEND_OPTIONS: IVoteOption[] = [
-  { key: 'going', label: "I'm going" },
-  { key: 'maybe', label: 'Maybe' },
-  { key: 'cant_go', label: "I can't go" },
-];
-
 const ATTENDING_WITH_OPTIONS: IVoteOption[] = [
   { key: 'friends', label: 'Friends' },
   { key: 'partner', label: 'Partner' },
@@ -54,16 +48,20 @@ const CUP_OPTIONS: IVoteOption[] = [
 ];
 
 /**
- * Canonical Attendance Status question order (spec §1): "Are you planning to
- * attend?" always first, "Who are you attending with?" immediately after,
- * then "How busy…", then "Who do you hope to bump into?", then "Choose Your
- * Cup" — with the event-conditional artist/song/outfit questions trailing so
- * they never interrupt that fixed chain. Used both to build `defs` below AND
- * to sort already-persisted questions at read time (sortQuestionsCanonically)
- * so an event whose questions were materialized before this ordering shipped
- * still displays correctly without a data migration.
+ * Canonical Attendance Status question order (per the client's latest
+ * revision: the standalone "Are you planning to attend?" question is
+ * removed entirely — see ensureVoteQuestions, which also filters any
+ * already-persisted 'attend' rows from earlier events out of every read
+ * path so it never displays or contributes results anywhere). "Who are you
+ * attending with?" is now first, then "How busy…", then "Who do you hope to
+ * bump into?", then "Choose Your Cup" — with the event-conditional
+ * artist/song/outfit questions trailing so they never interrupt that fixed
+ * chain. Used both to build `defs` below AND to sort already-persisted
+ * questions at read time (sortQuestionsCanonically) so an event whose
+ * questions were materialized before this ordering shipped still displays
+ * correctly without a data migration.
  */
-const KIND_DISPLAY_ORDER: VoteQuestionKind[] = ['attend', 'attending_with', 'busy', 'bump_into', 'cup', 'artist', 'song', 'outfit'];
+const KIND_DISPLAY_ORDER: VoteQuestionKind[] = ['attending_with', 'busy', 'bump_into', 'cup', 'artist', 'song', 'outfit'];
 
 function sortQuestionsCanonically<T extends { kind: VoteQuestionKind }>(questions: T[]): T[] {
   return [...questions].sort((a, b) => KIND_DISPLAY_ORDER.indexOf(a.kind) - KIND_DISPLAY_ORDER.indexOf(b.kind));
@@ -88,9 +86,9 @@ export function deriveQuestionDefinitions(
 ): Array<{ kind: VoteQuestionKind; prompt: string; options: IVoteOption[] }> {
   const defs: Array<{ kind: VoteQuestionKind; prompt: string; options: IVoteOption[] }> = [];
 
-  // Universal — relevant to every event, and always the fixed first-five
-  // chain in this exact order (spec §1).
-  defs.push({ kind: 'attend', prompt: 'Are you planning to attend?', options: ATTEND_OPTIONS });
+  // Universal — relevant to every event, and always the fixed chain in this
+  // exact order. No standalone "are you attending" question — that was
+  // removed per the client's latest revision; see ensureVoteQuestions.
   defs.push({ kind: 'attending_with', prompt: 'Who are you attending with?', options: ATTENDING_WITH_OPTIONS });
   defs.push({ kind: 'busy', prompt: 'How busy do you expect the event to be?', options: BUSY_OPTIONS });
   defs.push({ kind: 'bump_into', prompt: 'Who do you hope to bump into?', options: BUMP_INTO_OPTIONS });
@@ -134,13 +132,20 @@ async function loadEventOr404(eventId: string): Promise<IEvent> {
  * repeatedly as the event/lineup changes never mutates an existing question.
  * Safe to call on every read; the unique (eventId, kind) index absorbs a
  * concurrent double-create race.
+ *
+ * Filters out any legacy 'attend' row before returning: events materialized
+ * before the client removed that question may still carry one, and it must
+ * never display, or contribute to results, anywhere — removing it here (the
+ * single choke point every caller reads through) rather than deleting the
+ * row leaves past responses and ticket status untouched, exactly as
+ * required.
  */
 export async function ensureVoteQuestions(event: IEvent): Promise<IVoteQuestion[]> {
   const existing = await VoteQuestion.find({ eventId: event._id });
   const existingKinds = new Set(existing.map((q) => q.kind));
   const defs = deriveQuestionDefinitions(event);
   const missing = defs.filter((d) => !existingKinds.has(d.kind));
-  if (missing.length === 0) return sortQuestionsCanonically(existing);
+  if (missing.length === 0) return sortQuestionsCanonically(existing.filter((q) => q.kind !== 'attend'));
 
   for (const def of missing) {
     try {
@@ -150,7 +155,8 @@ export async function ensureVoteQuestions(event: IEvent): Promise<IVoteQuestion[
       if (err?.code !== 11000) throw err; // lost the create race — another request already materialized it
     }
   }
-  return sortQuestionsCanonically(await VoteQuestion.find({ eventId: event._id }));
+  const all = await VoteQuestion.find({ eventId: event._id });
+  return sortQuestionsCanonically(all.filter((q) => q.kind !== 'attend'));
 }
 
 export interface VoteQuestionView {
@@ -335,7 +341,7 @@ export async function castVote(eventId: string, questionId: string, actor: Socia
   if (window.hasClosed) throw new HttpError(409, 'Attendance Status has closed');
 
   const question = await VoteQuestion.findOne({ _id: questionId, eventId });
-  if (!question) throw new HttpError(404, 'Attendance Status question not found');
+  if (!question || question.kind === 'attend') throw new HttpError(404, 'Attendance Status question not found');
 
   const trimmedKey = String(optionKey || '').trim();
   if (!trimmedKey) throw new HttpError(400, 'optionKey is required');
