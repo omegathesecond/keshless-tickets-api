@@ -92,6 +92,45 @@ export class TicketPdfController {
     }
   }
 
+  /**
+   * POST /api/tickets/pdf-bundle — several of THIS vendor's tickets as one
+   * PDF. Mirrors downloadVendorTicketPdf's ownership check but for a list.
+   * Every ticket is resolved + authorised BEFORE any rendering starts: a
+   * bundle containing one foreign ticket must render nothing at all, since
+   * rendering first and rejecting after would still have generated (and
+   * risked leaking) another organizer's QR codes.
+   */
+  static async downloadVendorTicketsBundle(req: Request, res: Response): Promise<any> {
+    try {
+      const ticketIds: unknown = req.body?.ticketIds;
+      if (!Array.isArray(ticketIds) || ticketIds.length === 0 || !ticketIds.every((id) => typeof id === 'string')) {
+        return ApiResponseUtil.badRequest(res, 'ticketIds must be a non-empty array of ticket ids');
+      }
+      if (ticketIds.length > MAX_BUNDLE_TICKETS) {
+        return ApiResponseUtil.badRequest(res, `Cannot bundle more than ${MAX_BUNDLE_TICKETS} tickets at once`);
+      }
+
+      const ticketsUser = (req as any).ticketsUser || {};
+      const tickets: ITicket[] = [];
+      for (const id of ticketIds) {
+        const t = await TicketService.resolveVendorTicket(
+          id, ticketsUser.vendorId as string, ticketsUser.isSuperAdmin || false,
+        );
+        await t.populate('eventId', EVENT_POPULATE_FIELDS);
+        tickets.push(t);
+      }
+
+      const buffer = await TicketPdfService.buildBundlePdfBuffer(tickets);
+      sendPdf(res, buffer, 'tickets.pdf');
+    } catch (error: any) {
+      const msg = error?.message || '';
+      if (/not authorized/i.test(msg)) return ApiResponseUtil.forbidden(res, 'You are not allowed to access one of these tickets');
+      if (/not found/i.test(msg)) return ApiResponseUtil.notFound(res, 'Ticket not found');
+      console.error('Vendor bundle PDF error:', error);
+      return ApiResponseUtil.error(res, msg || 'Failed to generate ticket bundle');
+    }
+  }
+
   /** POST /api/public/tickets/pdf-bundle — several tickets as ONE downloadable PDF. */
   static async downloadTicketsBundle(req: Request, res: Response): Promise<any> {
     try {

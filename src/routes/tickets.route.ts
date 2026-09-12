@@ -198,6 +198,20 @@ router.get(
 );
 
 /**
+ * Vendor multi-ticket PDF bundle — several of the calling vendor's tickets
+ * as one multi-page PDF, so an organizer can download a whole sale at once.
+ * A literal single-segment path, so registration order relative to the
+ * `/:ticketId/...` patterns above doesn't matter. Every ticket is resolved
+ * and authorised via TicketService.resolveVendorTicket before any PDF bytes
+ * are rendered.
+ */
+router.post(
+  '/pdf-bundle',
+  requireTicketsPermission(TicketsPermission.SELL_TICKETS),
+  TicketPdfController.downloadVendorTicketsBundle
+);
+
+/**
  * Shareable ticket PDF — lazily generated and cached in R2.
  * Accepts the ticket code (TKT-…) or Mongo _id. Authorised either by the
  * requester's phone matching the ticket (user-app via proxy) or by vendor
