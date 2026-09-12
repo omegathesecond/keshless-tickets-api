@@ -832,6 +832,49 @@ export class TicketService {
     return ticket;
   }
 
+  /**
+   * Send ONE ticket to the recipient stored on that ticket. Deliberately takes
+   * no recipient argument: the ticket is the single source of truth, so a
+   * caller must PATCH the recipient first.
+   *
+   * Validates the channel against the stored contact BEFORE dispatching — an SMS
+   * credit is spent either way, so the guard belongs ahead of the send.
+   */
+  static async sendTicketToItsRecipient(
+    ticket: ITicket,
+    channel: 'sms' | 'email',
+  ): Promise<{ sent: boolean }> {
+    const event = await Event.findById(ticket.eventId);
+    if (!event) {
+      throw new Error(`Event not found for ticket: ${ticket.ticketId}`);
+    }
+
+    // The R2-cached artifact is idempotent — first call renders and uploads,
+    // later calls return the same URL.
+    const pdf = await TicketPdfService.ensureTicketPdf(ticket);
+
+    const summaries = [{
+      ticketId: ticket.ticketId,
+      eventName: event.name,
+      eventDate: event.eventDate.toISOString(),
+      startTime: event.startTime?.toISOString(),
+      venue: event.venue,
+      ...(pdf.pdfUrl ? { pdfUrl: pdf.pdfUrl } : {}),
+    }];
+
+    if (channel === 'sms') {
+      if (!ticket.customerPhone) {
+        throw new Error('This ticket has no recipient phone number');
+      }
+      return { sent: await SmsService.sendTicketConfirmation(ticket.customerPhone, summaries) };
+    }
+
+    if (!ticket.customerEmail) {
+      throw new Error('This ticket has no recipient email address');
+    }
+    return { sent: await EmailService.sendTicketConfirmation(ticket.customerEmail, summaries) };
+  }
+
   static async getSales(query: GetSalesQuery) {
     try {
       const {

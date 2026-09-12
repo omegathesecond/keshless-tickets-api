@@ -466,6 +466,12 @@ router.patch(
   TicketsController.updateTicketRecipient
 );
 
+router.post(
+  '/:ticketId/send',
+  requireTicketsPermission(TicketsPermission.SELL_TICKETS),
+  TicketsController.sendSingleTicket
+);
+
 router.get(
   '/sales',
   requireTicketsPermission(TicketsPermission.VIEW_SALES),

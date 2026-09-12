@@ -70,12 +70,19 @@ export class EmailService {
       )
       .join('');
 
+    // Optional: existing callers omit pdfUrl and this email body is byte-identical
+    // to before — mirrors the SMS append in SmsService.sendTicketConfirmation.
+    const pdfLink = first.pdfUrl
+      ? `<p><a href="${first.pdfUrl}">Download your ticket</a></p>`
+      : '';
+
     const html =
       `<div style="font-family:system-ui,sans-serif;font-size:16px;color:#1a1a1a">` +
       `<p>🎫 Your ${tickets.length > 1 ? `${tickets.length} tickets are` : 'ticket is'} confirmed!</p>` +
       `<p style="font-size:20px;font-weight:700;margin-bottom:4px">${first.eventName}</p>` +
       `<p style="margin-top:0;color:#555">${dateFull} • ${first.venue}</p>` +
       `<ul style="padding-left:20px">${rows}</ul>` +
+      pdfLink +
       `<p>Show a code above at entry.</p>` +
       `</div>`;
 

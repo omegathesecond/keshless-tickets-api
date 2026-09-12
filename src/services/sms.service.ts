@@ -36,6 +36,9 @@ export interface TicketSummary {
   eventDate: string;      // ISO (date-only marker, midnight UTC)
   startTime?: string;     // ISO instant — the real start; preferred for display
   venue: string;
+  /** Direct link to this ticket's PDF. Optional: existing callers omit it and
+   *  their message bodies are byte-identical to before. */
+  pdfUrl?: string;
 }
 
 export class SmsService {
@@ -133,7 +136,9 @@ export class SmsService {
         `🎫 ${first.eventName} ticket confirmed!\n` +
         `Code: ${groupTicketCode(first.ticketId)}\n` +
         `${dateShort} • ${first.venue}\n` +
-        `Show this code at entry. ${profileNote}`;
+        `Show this code at entry.` +
+        (first.pdfUrl ? `\nTicket: ${first.pdfUrl}` : '') +
+        ` ${profileNote}`;
     } else {
       const codes = tickets.map((t) => groupTicketCode(t.ticketId)).join('\n');
       const candidate =

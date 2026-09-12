@@ -1020,6 +1020,41 @@ export class TicketsController {
     }
   }
 
+  /** Sales: send ONE ticket to its own recipient over the chosen channel. */
+  static async sendSingleTicket(req: Request, res: Response): Promise<any> {
+    try {
+      const ticketsUser = (req as any).ticketsUser;
+
+      const { error, value } = Joi.object({
+        channel: Joi.string().valid('sms', 'email').required(),
+      }).validate(req.body);
+
+      if (error) {
+        return ApiResponseUtil.error(res, error.details[0]?.message || 'Validation error', 400);
+      }
+
+      const ticket = await TicketService.resolveVendorTicket(
+        req.params['ticketId'] as string,
+        ticketsUser.vendorId as string,
+        ticketsUser.isSuperAdmin || false,
+      );
+
+      const { sent } = await TicketService.sendTicketToItsRecipient(ticket, value.channel);
+      if (!sent) {
+        return ApiResponseUtil.error(res, 'Gateway did not accept the message', 502);
+      }
+      return ApiResponseUtil.success(res, { sent }, 'Ticket sent');
+    } catch (err: any) {
+      const msg = err?.message || '';
+      if (/not authorized/i.test(msg)) return ApiResponseUtil.error(res, 'You are not allowed to access this ticket', 403);
+      if (/no recipient/i.test(msg)) return ApiResponseUtil.error(res, msg, 400);
+      if (/event not found/i.test(msg)) return ApiResponseUtil.error(res, 'Internal error: event data missing for this ticket', 500);
+      if (/not found/i.test(msg)) return ApiResponseUtil.error(res, 'Ticket not found', 404);
+      console.error('Send single ticket error:', err);
+      return ApiResponseUtil.error(res, msg || 'Failed to send ticket');
+    }
+  }
+
   /**
    * Sales: Get sales
    */
