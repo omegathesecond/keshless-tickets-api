@@ -29,6 +29,7 @@ import { computeSaleEconomics, SaleEconomics, SaleSoldByType } from '@services/s
 import { assertCarrotTicketing } from '@utils/ticketingGuard.util';
 import { FollowService } from '@services/follow.service';
 import { EventCurrency, settlementCurrencyForMethod } from '@utils/currency.util';
+import { TicketPdfService } from '@services/ticketPdf.service';
 import mongoose from 'mongoose';
 
 export interface SellTicketsParams {
@@ -809,6 +810,26 @@ export class TicketService {
     }
 
     return this.sendSaleConfirmationSms(sale);
+  }
+
+  /**
+   * Load a ticket by its code (TKT-…) or Mongo _id and assert the calling vendor
+   * owns it. Every vendor-scoped per-ticket route funnels through here so the
+   * ownership rule has exactly one implementation.
+   */
+  static async resolveVendorTicket(
+    idOrCode: string,
+    vendorId: string,
+    isSuperAdmin = false,
+  ): Promise<ITicket> {
+    const ticket = await TicketPdfService.resolveTicket(idOrCode);
+    if (!ticket) {
+      throw new Error(`Ticket not found: ${idOrCode}`);
+    }
+    if (!isSuperAdmin && ticket.vendorId?.toString() !== vendorId) {
+      throw new Error('Not authorized to access this ticket');
+    }
+    return ticket;
   }
 
   static async getSales(query: GetSalesQuery) {

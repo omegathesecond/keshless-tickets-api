@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import Joi from 'joi';
-import { PaymentMethod, PaymentStatus, SalesChannel } from '@interfaces/ticket.interface';
+import { PaymentMethod, PaymentStatus, SalesChannel, TicketStatus } from '@interfaces/ticket.interface';
 import { ApiResponseUtil } from '@utils/apiResponse.util';
 import { failWithHttpError } from '@utils/controllerHelpers.util';
 import { TicketsAuthService } from '@services/ticketsAuth.service';
@@ -12,6 +12,7 @@ import { EventFinancialsService } from '@services/eventFinancials.service';
 import { ExportService } from '@services/export.service';
 import { WalletService } from '@services/wallet.service';
 import { normalizeBandUid } from '@utils/bandUid.util';
+import { normalizePhone } from '@utils/phone.util';
 import { Event } from '@models/event.model';
 import { Wallet } from '@models/wallet.model';
 import { Ticket } from '@models/ticket.model';
@@ -959,6 +960,63 @@ export class TicketsController {
       }
       console.error('Send sale SMS error:', err);
       return ApiResponseUtil.error(res, msg || 'Failed to send ticket SMS');
+    }
+  }
+
+  /**
+   * Sales: set one ticket's own recipient. Tickets minted in one sale share the
+   * buyer's details by default; this is how an organizer gives each ticket to a
+   * different person.
+   *
+   * Refuses a scanned ticket: silently moving a used ticket to a new name is how
+   * gate disputes start.
+   */
+  static async updateTicketRecipient(req: Request, res: Response): Promise<any> {
+    try {
+      const ticketsUser = (req as any).ticketsUser;
+
+      const { error, value } = Joi.object({
+        name: Joi.string().trim().max(120).optional(),
+        phone: Joi.string().trim().max(32).optional(),
+        email: Joi.string().trim().email().max(254).optional(),
+      }).or('name', 'phone', 'email').validate(req.body);
+
+      if (error) {
+        return ApiResponseUtil.error(res, error.details[0]?.message || 'Validation error', 400);
+      }
+
+      const ticketId = req.params['ticketId'];
+      const ticket = await TicketService.resolveVendorTicket(
+        ticketId as string,
+        ticketsUser.vendorId as string,
+        ticketsUser.isSuperAdmin || false,
+      );
+
+      // A scanned ticket is CHECKED_IN — there is no USED member on this enum
+      // (TicketStatus = available | sold | checked_in | refunded | cancelled).
+      if (ticket.status === TicketStatus.CHECKED_IN) {
+        return ApiResponseUtil.error(res, 'This ticket has already been scanned and cannot be reassigned', 409);
+      }
+
+      if (value.name !== undefined) ticket.customerName = value.name;
+      if (value.phone !== undefined) ticket.customerPhone = normalizePhone(value.phone);
+      if (value.email !== undefined) ticket.customerEmail = value.email.toLowerCase();
+      await ticket.save();
+
+      return ApiResponseUtil.success(res, {
+        ticket: {
+          ticketId: ticket.ticketId,
+          customerName: ticket.customerName,
+          customerPhone: ticket.customerPhone,
+          customerEmail: ticket.customerEmail,
+        },
+      }, 'Recipient updated');
+    } catch (err: any) {
+      const msg = err?.message || '';
+      if (/not authorized/i.test(msg)) return ApiResponseUtil.error(res, 'You are not allowed to access this ticket', 403);
+      if (/not found/i.test(msg)) return ApiResponseUtil.error(res, 'Ticket not found', 404);
+      console.error('Update ticket recipient error:', err);
+      return ApiResponseUtil.error(res, msg || 'Failed to update recipient');
     }
   }
 
