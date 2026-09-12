@@ -39,6 +39,9 @@ it('sets the recipient on the vendor own ticket', async () => {
   const t = await makeTicket(vendorId);
   const res = await patch(t.ticketId, { name: 'Thandi', phone: '+26876111111' });
   expect(res.status).toBe(200);
+  expect(res.body.data.ticket.ticketId).toBe(t.ticketId);
+  expect(res.body.data.ticket.customerName).toBe('Thandi');
+  expect(res.body.data.ticket.customerPhone).toBe('+26876111111');
   const fresh = await Ticket.findById(t._id);
   expect(fresh!.customerName).toBe('Thandi');
   expect(fresh!.customerPhone).toBe('+26876111111');
@@ -60,6 +63,8 @@ it('refuses to reassign an already-scanned ticket', async () => {
   const t = await makeTicket(vendorId, 'checked_in');
   const res = await patch(t.ticketId, { name: 'Thandi' });
   expect(res.status).toBe(409);
+  const fresh = await Ticket.findById(t._id);
+  expect(fresh!.customerName).toBe('Walk-up');
 });
 
 it('404s an unknown ticket', async () => {
