@@ -40,11 +40,11 @@ async function seedEvent(opts: { startInDays: number; publishedDaysAgo: number; 
 describe('deriveQuestionDefinitions', () => {
   it('only includes gated questions when the event actually carries their data', () => {
     const bare = deriveQuestionDefinitions({ lineup: undefined, outfitThemeOptions: undefined, category: 'Other' as any });
-    expect(bare.map((d) => d.kind)).toEqual(['attending_with', 'busy']);
+    expect(bare.map((d) => d.kind)).toEqual(['attend', 'attending_with', 'busy', 'bump_into', 'cup']);
 
     const full = deriveQuestionDefinitions({ lineup: ['DJ Nova', 'MC Rae'], outfitThemeOptions: ['White Party', 'Neon'], category: 'Music' as any });
-    expect(full.map((d) => d.kind)).toEqual(['artist', 'song', 'outfit', 'attending_with', 'busy']);
-    expect(full[0]!.options.map((o) => o.label)).toEqual(['DJ Nova', 'MC Rae']);
+    expect(full.map((d) => d.kind)).toEqual(['attend', 'attending_with', 'busy', 'bump_into', 'cup', 'artist', 'song', 'outfit']);
+    expect(full.find((d) => d.kind === 'artist')!.options.map((o) => o.label)).toEqual(['DJ Nova', 'MC Rae']);
   });
 
   it('includes the song question for a lineup event even outside the Music category', () => {
@@ -206,5 +206,53 @@ describe('vote.service', () => {
     expect(revealedQ.confirmedTags).toHaveLength(1);
     expect(revealedQ.confirmedTags![0]!.tagger.username).toBe('tagger_h');
     expect(revealedQ.confirmedTags![0]!.taggedUser.username).toBe('confirmed_h');
+  });
+
+  it('renders the Attendance Status questions in the required fixed order, with event-conditional questions trailing', async () => {
+    const event = await seedEvent({ startInDays: 3, publishedDaysAgo: 4, lineup: ['DJ Nova'], outfitThemeOptions: ['Neon'], category: 'Music' });
+    const payload = await getVotePayload(String(event._id), null);
+    expect(payload.questions.map((q) => q.kind)).toEqual([
+      'attend',
+      'attending_with',
+      'busy',
+      'bump_into',
+      'cup',
+      'artist',
+      'song',
+      'outfit',
+    ]);
+  });
+
+  it('sorts questions canonically even when a legacy row was persisted with a stale `order` value', async () => {
+    // Simulates data materialized before 'attend'/'bump_into'/'cup' existed —
+    // 'busy' persisted with order 1 (once second-from-last), 'attending_with'
+    // with order 0 — and confirms display order still follows KIND_DISPLAY_ORDER,
+    // not the stored field, so no backfill migration is required.
+    const event = await seedEvent({ startInDays: 3, publishedDaysAgo: 4 });
+    await VoteQuestion.create({ eventId: event._id, kind: 'busy', prompt: 'How busy do you expect the event to be?', order: 1, options: [] });
+    await VoteQuestion.create({ eventId: event._id, kind: 'attending_with', prompt: 'Who are you attending with?', order: 0, options: [] });
+
+    const payload = await getVotePayload(String(event._id), null);
+    expect(payload.questions.map((q) => q.kind)).toEqual(['attend', 'attending_with', 'busy', 'bump_into', 'cup']);
+  });
+
+  it('accepts a vote for the new attend and cup questions with their spec-defined option keys', async () => {
+    const event = await seedEvent({ startInDays: 3, publishedDaysAgo: 4 });
+    const { Buyer } = await import('@models/buyer.model');
+    const a = await Buyer.create({ phone: '+26878400011', password: 'secret1', username: 'voter_i' });
+    const actor = { type: 'buyer' as const, id: String(a._id) };
+
+    const payload = await getVotePayload(String(event._id), actor);
+    const attendQ = payload.questions.find((q) => q.kind === 'attend')!;
+    expect(attendQ.options.map((o) => o.key)).toEqual(['going', 'maybe', 'cant_go']);
+    const cupQ = payload.questions.find((q) => q.kind === 'cup')!;
+    expect(cupQ.options.map((o) => o.key)).toEqual(['green', 'yellow', 'red']);
+    const bumpQ = payload.questions.find((q) => q.kind === 'bump_into')!;
+    expect(bumpQ.options.map((o) => o.label)).toContain('My ex');
+
+    const afterAttend = await castVote(String(event._id), attendQ.id, actor, 'going');
+    expect(afterAttend.viewerSelection).toBe('going');
+    const afterCup = await castVote(String(event._id), cupQ.id, actor, 'green');
+    expect(afterCup.viewerSelection).toBe('green');
   });
 });
