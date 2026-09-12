@@ -3,8 +3,7 @@ import Joi from 'joi';
 import { ApiResponseUtil } from '@utils/apiResponse.util';
 import { resolveActorFromRequest } from '@utils/socialActor.util';
 import { failWithHttpError } from '@utils/controllerHelpers.util';
-import { UpdateController } from '@controllers/update.controller';
-import { getViewerReactions } from '@services/update.service';
+import { UpdateService } from '@services/update.service';
 import { listWeekendRecaps, pickWeekendRecapLabel } from '@services/weekendRecap.service';
 
 // See-All page: page-based pagination (not the cursor convention used by
@@ -19,9 +18,12 @@ export const weekendRecapsQuerySchema = Joi.object({
 export class WeekendRecapController {
   /**
    * GET /api/public/weekend-recaps — the Weekend Recap "See All" page.
-   * Same visibility filter and per-post DTO as every other Update listing
-   * (getTopicPosts/listByAuthor/listByEvent); older recap posts stay
-   * reachable here even once they age out of the Home-feed slot.
+   * Unlike listByAuthor/listByEvent (grids that intentionally omit author —
+   * every tile already shares one), this page renders full post cards
+   * spanning MANY different authors, so it reuses
+   * UpdateService.buildUpdateSlides — the same author+reaction-hydrated
+   * feed-slide shape Home/Discover/profile already render — rather than
+   * UpdateController.dto (which has no per-post author).
    */
   static async list(req: Request, res: Response): Promise<any> {
     try {
@@ -32,11 +34,8 @@ export class WeekendRecapController {
       const { docs, hasMore } = await listWeekendRecaps({ page, limit, sort, filter });
 
       const actor = await resolveActorFromRequest(req).catch(() => null);
-      const reactions = actor && docs.length ? await getViewerReactions(docs.map((d) => d.id), actor) : undefined;
-      const posts = docs.map((d) => ({
-        ...UpdateController.dto(d, reactions?.[d.id], UpdateController.isActorAuthor(d, actor)),
-        label: pickWeekendRecapLabel(d.id),
-      }));
+      const slides = await UpdateService.buildUpdateSlides(docs, actor);
+      const posts = slides.map((s) => ({ ...s, label: pickWeekendRecapLabel(s.id) }));
 
       return ApiResponseUtil.success(res, { posts, page, hasMore });
     } catch (error: any) {

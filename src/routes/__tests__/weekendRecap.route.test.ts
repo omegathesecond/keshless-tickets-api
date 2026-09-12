@@ -4,9 +4,12 @@ import app from '@/app';
 import { connectTestDb, clearTestDb, disconnectTestDb } from '../../__tests__/helpers/mongo';
 import { Update } from '@models/update.model';
 
+import { Buyer } from '@models/buyer.model';
+
 async function seedRecap(caption: string) {
+  const author = await Buyer.create({ phone: '+2687840' + Math.floor(Math.random() * 1000000), password: 'secret1', name: 'Recap Poster', username: 'recap_' + Math.random().toString(36).slice(2) });
   return Update.create({
-    authorType: 'buyer', authorId: new mongoose.Types.ObjectId(), kind: 'image', category: 'weekend_recap', caption,
+    authorType: 'buyer', authorId: author._id, kind: 'image', category: 'weekend_recap', caption,
     media: [{ rawKey: 'k', status: 'ready', image: { url: 'u', width: 1, height: 1 } }],
   });
 }
@@ -26,6 +29,12 @@ describe('GET /api/public/weekend-recaps', () => {
     expect(res.body.data.posts).toHaveLength(1);
     expect(res.body.data.posts[0].caption).toBe('r1');
     expect(res.body.data.posts[0].label).toBeTruthy();
+    // Each post spans a DIFFERENT author on this page (unlike the by-author
+    // grid), so it must carry its own hydrated author for the card header —
+    // regression coverage for a bug where this endpoint used
+    // UpdateController.dto (no per-post author) instead of
+    // UpdateService.buildUpdateSlides.
+    expect(res.body.data.posts[0].author).toEqual(expect.objectContaining({ type: 'buyer', name: 'Recap Poster', username: expect.stringMatching(/^recap_/) }));
   });
 
   it('returns an empty list (not an error) when there are no recap posts', async () => {
