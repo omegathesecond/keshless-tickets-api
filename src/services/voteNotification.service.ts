@@ -87,7 +87,7 @@ export class VoteNotificationService {
       const toOpen = recipients.filter((id) => !openedAlready.has(id));
       if (toOpen.length > 0) {
         const name = event.name.length > 100 ? `${event.name.slice(0, 99)}…` : event.name;
-        await NotificationDispatcher.dispatch(toOpen, 'vote_opened', 'Vote is open 🗳️', `Vote is live for ${name} — have your say`, { eventId });
+        await NotificationDispatcher.dispatch(toOpen, 'vote_opened', 'Attendance Status is open 📋', `Update your Attendance Status for ${name} — share your plans`, { eventId });
       }
 
       const msRemaining = window.closesAt.getTime() - now.getTime();
@@ -96,7 +96,7 @@ export class VoteNotificationService {
         const toRemind = recipients.filter((id) => !remindedAlready.has(id));
         if (toRemind.length > 0) {
           const name = event.name.length > 100 ? `${event.name.slice(0, 99)}…` : event.name;
-          await NotificationDispatcher.dispatch(toRemind, 'vote_reminder', 'Last chance to Vote 🗳️', `Voting for ${name} closes soon`, { eventId });
+          await NotificationDispatcher.dispatch(toRemind, 'vote_reminder', 'Last chance to respond 📋', `Attendance Status for ${name} closes soon`, { eventId });
         }
       }
     }

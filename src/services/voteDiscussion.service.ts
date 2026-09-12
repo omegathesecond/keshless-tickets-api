@@ -173,7 +173,7 @@ export async function moderateRemoveComment(commentId: string, ticketsUser: any)
   if (!comment) throw new HttpError(404, 'Comment not found');
   if (comment.status === 'removed') return;
   if (!(await canModerate(String(comment.eventId), ticketsUser))) {
-    throw new HttpError(403, 'You cannot moderate this event\'s Vote discussion');
+    throw new HttpError(403, "You cannot moderate this event's Attendance Status discussion");
   }
   comment.status = 'removed';
   comment.removedBy = ticketsUser.isSuperAdmin && !ticketsUser.vendorId ? 'platform' : String(ticketsUser.vendorId);

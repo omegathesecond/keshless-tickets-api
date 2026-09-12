@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
-export type VoteQuestionKind = 'artist' | 'song' | 'outfit' | 'attending_with' | 'busy';
+export type VoteQuestionKind = 'artist' | 'song' | 'outfit' | 'attend' | 'attending_with' | 'busy' | 'bump_into' | 'cup';
 
 export interface IVoteOption {
   key: string;
@@ -8,17 +8,23 @@ export interface IVoteOption {
 }
 
 /**
- * One Vote question for one event (spec "Vote" feature). A question is
- * materialized AT MOST ONCE per (eventId, kind) — see
+ * One Attendance Status question for one event (user-facing feature name;
+ * internal model/collection names are kept as `VoteQuestion`/`VoteResponse`
+ * etc. to avoid an unnecessary data migration — see @services/vote.service).
+ * A question is materialized AT MOST ONCE per (eventId, kind) — see
  * @services/vote.service#ensureVoteQuestions — by snapshotting whatever
  * event data it's gated on (event.lineup for 'artist', event.outfitThemeOptions
- * for 'outfit') at the moment the Vote first opens. `options` is then frozen:
- * nothing in this codebase ever mutates it afterward, which is what satisfies
- * "once voting has started, do not change the questions or available
- * options" without needing a separate lock flag.
+ * for 'outfit') at the moment Attendance Status first opens. `options` is then
+ * frozen: nothing in this codebase ever mutates it afterward, which is what
+ * satisfies "once responses have started, do not change the questions or
+ * available options" without needing a separate lock flag.
+ *
+ * Canonical display order (see vote.service#KIND_DISPLAY_ORDER) is: attend,
+ * attending_with, busy, bump_into, cup, then the event-conditional
+ * artist/song/outfit questions.
  *
  * 'song' questions carry NO options here — suggestions are user-submitted
- * (see @models/songSuggestion.model) and are the vote targets instead.
+ * (see @models/songSuggestion.model) and are the response targets instead.
  */
 export interface IVoteQuestion extends Document {
   eventId: Types.ObjectId;
@@ -41,7 +47,7 @@ const voteOptionSchema = new Schema<IVoteOption>(
 const schema = new Schema<IVoteQuestion>(
   {
     eventId: { type: Schema.Types.ObjectId, ref: 'Event', required: true, index: true },
-    kind: { type: String, enum: ['artist', 'song', 'outfit', 'attending_with', 'busy'], required: true },
+    kind: { type: String, enum: ['artist', 'song', 'outfit', 'attend', 'attending_with', 'busy', 'bump_into', 'cup'], required: true },
     prompt: { type: String, required: true, trim: true, maxlength: 200 },
     order: { type: Number, required: true, default: 0 },
     options: { type: [voteOptionSchema], default: [] },

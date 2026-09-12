@@ -19,7 +19,7 @@ export class VoteController {
       const actor = await resolveActorFromRequest(req).catch(() => null);
       return ApiResponseUtil.success(res, await getVotePayload(req.params['eventId'] as string, actor));
     } catch (error: any) {
-      return failWithHttpError(res, error, 'Failed to load Vote');
+      return failWithHttpError(res, error, 'Failed to load Attendance Status');
     }
   }
 
@@ -27,12 +27,12 @@ export class VoteController {
   static async cast(req: Request, res: Response): Promise<any> {
     try {
       const buyer = await resolveBuyerFromRequest(req);
-      if (!buyer) return ApiResponseUtil.unauthorized(res, 'Please sign in to vote');
+      if (!buyer) return ApiResponseUtil.unauthorized(res, 'Please sign in to respond');
       const actor = { type: 'buyer' as const, id: String(buyer._id) };
       const view = await castVote(req.params['eventId'] as string, req.params['questionId'] as string, actor, req.body?.optionKey);
-      return ApiResponseUtil.success(res, view, 'Vote recorded');
+      return ApiResponseUtil.success(res, view, 'Response saved');
     } catch (error: any) {
-      return failWithHttpError(res, error, 'Failed to record vote');
+      return failWithHttpError(res, error, 'Failed to save your response');
     }
   }
 
