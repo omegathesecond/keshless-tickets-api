@@ -6,6 +6,7 @@ import { Vendor } from '@models/vendor.model';
 import { Event } from '@models/event.model';
 import { Buyer } from '@models/buyer.model';
 import { FollowService } from '@services/follow.service';
+import { EventStatus } from '@interfaces/event.interface';
 
 describe('organizer public profile', () => {
   beforeAll(connectTestDb);
@@ -41,11 +42,32 @@ describe('organizer public profile', () => {
     expect(p.logoUrl).toBe('https://cdn.example.com/logo.png');
     expect(p.followerCount).toBe(1);
     expect(p.followingCount).toBe(1);
+    expect(p.eventCount).toBe(2);
     expect(p.rating).toEqual({ average: null, count: 0 });
     expect(p.upcomingEvents.map((e: any) => e.id)).toEqual([upcoming.eventId]);
     expect(p.pastEvents.map((e: any) => e.id)).toEqual([past.eventId]);
     expect(JSON.stringify(p)).not.toContain('org@example.com');
     expect(JSON.stringify(p)).not.toContain('+26878000099');
+  });
+
+  it('eventCount excludes drafts, pending approval and cancelled events, includes completed', async () => {
+    const vendor = await Vendor.create({
+      businessName: 'Draft Heavy Events', email: 'drafty@example.com', password: 'secret123',
+      phoneNumber: '+26878000096',
+    });
+
+    await seedPublishedEvent({ vendorId: vendor._id as any });
+    const completed = await seedPublishedEvent({ vendorId: vendor._id as any });
+    await Event.updateOne({ _id: completed.eventId }, { status: EventStatus.COMPLETED });
+    const cancelled = await seedPublishedEvent({ vendorId: vendor._id as any });
+    await Event.updateOne({ _id: cancelled.eventId }, { status: EventStatus.CANCELLED });
+    const draft = await seedPublishedEvent({ vendorId: vendor._id as any });
+    await Event.updateOne({ _id: draft.eventId }, { status: EventStatus.DRAFT });
+    const pending = await seedPublishedEvent({ vendorId: vendor._id as any });
+    await Event.updateOne({ _id: pending.eventId }, { status: EventStatus.PENDING_APPROVAL });
+
+    const res = await request(app).get(`/api/public/organizers/${String(vendor._id)}`).expect(200);
+    expect(res.body.data.eventCount).toBe(2);
   });
 
   it('404 for unknown and for inactive vendors; 400 for bad id', async () => {

@@ -86,7 +86,7 @@ export class OrganizerProfileController {
       // targetType 'organizer' (it's a follow target), while the brands/people
       // this brand FOLLOWS are counted by followerType 'vendor' (it's the
       // actor) — same split /brand/me uses (vendorSocial.controller.ts).
-      const [followerCount, followingCount, rating, upcoming, past] = await Promise.all([
+      const [followerCount, followingCount, rating, upcoming, past, eventCount] = await Promise.all([
         FollowService.followerCount('organizer', vendorId),
         FollowService.followingCount(vendorId, 'vendor'),
         ReviewService.vendorAggregate(vendorId),
@@ -97,6 +97,12 @@ export class OrganizerProfileController {
           status: { $in: [EventStatus.PUBLISHED, EventStatus.COMPLETED] },
           ...endedFilter(now),
         }).select(eventFields).sort({ eventDate: -1 }).limit(20),
+        // Total publicly-visible event count (union of the upcoming/past
+        // queries above, minus their 20-item display cap) — drafts, pending
+        // approval, and cancelled events are excluded by the status filter;
+        // deleted events are hard-deleted (Event.deleteOne) so they can never
+        // match.
+        Event.countDocuments({ vendorId, status: { $in: [EventStatus.PUBLISHED, EventStatus.COMPLETED] } }),
       ]);
 
       const toSummary = (e: any) => ({
@@ -115,6 +121,7 @@ export class OrganizerProfileController {
         bio: vendor.bio ?? null,
         followerCount,
         followingCount,
+        eventCount,
         rating,
         upcomingEvents: upcoming.map(toSummary),
         pastEvents: past.map(toSummary),
