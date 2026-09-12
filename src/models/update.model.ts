@@ -25,6 +25,10 @@ export interface IUpdate extends Document {
   hiddenFromDiscoverAt?: Date | null;
   /** The moderator (vendor/sub-user id) who hid it — audit trail for the above. */
   hiddenFromDiscoverBy?: string | null;
+  /** Set the first time the caption is edited post-publish; stays set (to the
+   *  latest edit time) after that. Null/absent means never edited — drives
+   *  the "Edited" label next to the post's timestamp everywhere it appears. */
+  editedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -55,6 +59,7 @@ const updateSchema = new Schema<IUpdate>({
   // satisfies for posts predating this field). A Date takes it off Discover.
   hiddenFromDiscoverAt: { type: Date, default: null },
   hiddenFromDiscoverBy: { type: String, default: null },
+  editedAt: { type: Date, default: null },
 }, { timestamps: true });
 
 updateSchema.index({ createdAt: -1 });

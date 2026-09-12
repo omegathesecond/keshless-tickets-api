@@ -21,6 +21,7 @@ router.get('/:id/comments', optionalTicketsAuth, UpdateCommentController.list);
 router.post('/:id/comments', optionalTicketsAuth, requireProfilePhoto, UpdateCommentController.create);
 
 router.get('/:id', optionalTicketsAuth, UpdateController.getOne);
+router.patch('/:id', optionalTicketsAuth, UpdateController.editCaption);
 router.post('/:id/like', authenticateBuyer, requireProfilePhoto, UpdateController.react('like'));
 router.post('/:id/save', authenticateBuyer, UpdateController.react('save'));
 router.post('/:id/share', UpdateController.share);
