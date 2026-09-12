@@ -62,6 +62,23 @@ export async function getUpdate(id: string): Promise<IUpdate | null> {
   return Update.findById(id);
 }
 
+/**
+ * Edit a published post's caption in place — same document, same
+ * createdAt/feed position, no new post created. Re-derives hashtags from the
+ * new caption (create's rule, kept in sync here) and stamps editedAt so
+ * every surface can show an "Edited" label. Caption length/shape validation
+ * is the CALLER's job (controller), mirroring createUpdate.
+ */
+export async function editUpdateCaption(id: string, caption: string): Promise<IUpdate> {
+  const update = await Update.findById(id);
+  if (!update) throw new Error('Update not found');
+  update.caption = caption;
+  update.hashtags = extractHashtags(caption);
+  update.editedAt = new Date();
+  await update.save();
+  return update;
+}
+
 const counterField = (type: 'like' | 'save') => (type === 'like' ? 'likeCount' : 'saveCount');
 
 export async function toggleReaction(updateId: string, actor: SocialActor, type: 'like' | 'save') {
@@ -137,7 +154,7 @@ export class UpdateService {
         : { type: 'buyer', id: String(u.authorId), name: bMap.get(String(u.authorId))?.name ?? null, username: bMap.get(String(u.authorId))?.username ?? null, avatarUrl: bMap.get(String(u.authorId))?.avatarUrl ?? null };
       return {
         type: 'update', id: String(u._id), sortAt: u.createdAt.toISOString(),
-        kind: u.kind, caption: u.caption, media: u.media,
+        kind: u.kind, caption: u.caption, editedAt: u.editedAt ? u.editedAt.toISOString() : null, media: u.media,
         likeCount: u.likeCount, saveCount: u.saveCount, shareCount: u.shareCount, viewCount: u.viewCount ?? 0,
         eventId: u.eventId ? String(u.eventId) : null, author,
         viewerReactions: reactions[String(u._id)] ?? { liked: false, saved: false },

@@ -3,7 +3,7 @@ import { ApiResponseUtil } from '@utils/apiResponse.util';
 import { resolveBuyerFromRequest } from '@utils/buyerRequest.util';
 import { resolveActorFromRequest, isActorAuthorOf, type SocialActor } from '@utils/socialActor.util';
 import { failWithHttpError, HEX24 } from '@utils/controllerHelpers.util';
-import { createUpdate, finalizeUpdate, getUpdate, toggleReaction, recordShare, recordView, getViewerReactions } from '@services/update.service';
+import { createUpdate, finalizeUpdate, getUpdate, editUpdateCaption, toggleReaction, recordShare, recordView, getViewerReactions } from '@services/update.service';
 import { resolveUpdateAuthor } from '@services/updateAuthor';
 import { validateCreateItems } from '@utils/updateCreate.util';
 import { Update } from '@models/update.model';
@@ -11,13 +11,17 @@ import type { UpdateAuthorType } from '@interfaces/update.interface';
 
 const AUTHOR_TYPES: UpdateAuthorType[] = ['buyer', 'vendor'];
 const PAGE_SIZE = 24;
+/** Shared by create, createAsVendor and editCaption — one caption-length rule
+ *  everywhere it's enforced, per the "same limits used when creating a post"
+ *  requirement on edits. */
+const MAX_CAPTION_LENGTH = 500;
 
 export class UpdateController {
   static async create(req: Request, res: Response): Promise<any> {
     const buyer = await resolveBuyerFromRequest(req);
     if (!buyer) return ApiResponseUtil.unauthorized(res, 'Please sign in first');
     const { caption = '', eventId, items } = req.body || {};
-    if (typeof caption === 'string' && caption.length > 500) return ApiResponseUtil.validationError(res, 'caption too long');
+    if (typeof caption === 'string' && caption.length > MAX_CAPTION_LENGTH) return ApiResponseUtil.validationError(res, 'caption too long');
     const v = validateCreateItems(req.body?.kind, items);
     if (!v.ok) return ApiResponseUtil.validationError(res, v.message);
     try {
@@ -56,7 +60,7 @@ export class UpdateController {
     const vendorId = (req as any).ticketsUser?.vendorId;
     if (!vendorId) return ApiResponseUtil.unauthorized(res, 'Vendor sign-in required');
     const { caption = '', eventId, items } = req.body || {};
-    if (typeof caption === 'string' && caption.length > 500) return ApiResponseUtil.validationError(res, 'caption too long');
+    if (typeof caption === 'string' && caption.length > MAX_CAPTION_LENGTH) return ApiResponseUtil.validationError(res, 'caption too long');
     const v = validateCreateItems(req.body?.kind, items);
     if (!v.ok) return ApiResponseUtil.validationError(res, v.message);
     try {
@@ -84,6 +88,36 @@ export class UpdateController {
       return ApiResponseUtil.success(res, UpdateController.dto(out));
     } catch (err: any) {
       return ApiResponseUtil.error(res, err?.message || 'Failed to finalize', 500);
+    }
+  }
+
+  /**
+   * PATCH /api/public/updates/:id — edit a published post's caption in
+   * place. ONE path for both buyer- and vendor-authored posts (mounted with
+   * optionalTicketsAuth, actor resolved here), same reasoning as remove():
+   * updateBase() would send a vendor to /api/tickets/updates, which has no
+   * PATCH.
+   *
+   * Ownership is enforced HERE, server-side — never trust the client's menu
+   * gating alone. A platform superadmin may also edit (same moderator
+   * carve-out as remove()'s isSuperAdmin bypass).
+   */
+  static async editCaption(req: Request, res: Response): Promise<any> {
+    const { caption } = req.body || {};
+    if (typeof caption !== 'string') return ApiResponseUtil.validationError(res, 'caption is required');
+    if (caption.length > MAX_CAPTION_LENGTH) return ApiResponseUtil.validationError(res, 'caption too long');
+
+    const actor = await resolveActorFromRequest(req).catch(() => null);
+    const isSuperAdmin = (req as any).ticketsUser?.isSuperAdmin === true;
+    const update = await Update.findById(req.params['id'] as string);
+    if (!update || update.status === 'removed') return ApiResponseUtil.notFound(res, 'Update not found');
+    if (!UpdateController.isActorAuthor(update, actor) && !isSuperAdmin) return ApiResponseUtil.forbidden(res, 'Not your post');
+
+    try {
+      const updated = await editUpdateCaption(update.id, caption);
+      return ApiResponseUtil.success(res, UpdateController.dto(updated, undefined, UpdateController.isActorAuthor(updated, actor)));
+    } catch (err: any) {
+      return ApiResponseUtil.error(res, err?.message || 'Failed to save caption', 500);
     }
   }
 
@@ -287,6 +321,7 @@ export class UpdateController {
       authorId: String(update.authorId),
       kind: update.kind,
       caption: update.caption,
+      editedAt: update.editedAt ? update.editedAt.toISOString() : null,
       eventId: update.eventId ? String(update.eventId) : null,
       media: update.media,
       likeCount: update.likeCount,
