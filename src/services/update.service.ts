@@ -54,11 +54,14 @@ export interface EditUpdateInput {
 }
 
 /**
- * Content owners editing a published caption "without re-uploading the
- * media" (What's Hot spec §5) — media/eventId/feature are immutable here;
- * only the text fields a creator might want to correct after posting.
+ * Content owners editing a published post "without re-uploading the media"
+ * (What's Hot spec §5) — media/eventId/feature are immutable here; only the
+ * caption and, for a What's Hot post, its venue/category/activityDate.
  * `caption` re-derives hashtags the same way createUpdate does, so an edit
- * that adds/removes a `#tag` stays consistent with topic/hashtag lookups.
+ * that adds/removes a `#tag` stays consistent with topic/hashtag lookups,
+ * and stamps `editedAt` so every surface can show an "Edited" label.
+ * Hot-field edits alone don't touch `editedAt` — the caption itself is
+ * unchanged, so there's nothing to flag as edited.
  */
 export async function editUpdate(id: string, input: EditUpdateInput): Promise<IUpdate | null> {
   const update = await Update.findById(id);
@@ -66,6 +69,7 @@ export async function editUpdate(id: string, input: EditUpdateInput): Promise<IU
   if (input.caption !== undefined) {
     update.caption = input.caption;
     update.hashtags = extractHashtags(input.caption);
+    update.editedAt = new Date();
   }
   if (update.feature === 'whats-hot') {
     if (input.hotCategory !== undefined) update.hotCategory = input.hotCategory;
@@ -176,7 +180,7 @@ export class UpdateService {
         : { type: 'buyer', id: String(u.authorId), name: bMap.get(String(u.authorId))?.name ?? null, username: bMap.get(String(u.authorId))?.username ?? null, avatarUrl: bMap.get(String(u.authorId))?.avatarUrl ?? null };
       return {
         type: 'update', id: String(u._id), sortAt: u.createdAt.toISOString(),
-        kind: u.kind, caption: u.caption, media: u.media,
+        kind: u.kind, caption: u.caption, editedAt: u.editedAt ? u.editedAt.toISOString() : null, media: u.media,
         likeCount: u.likeCount, saveCount: u.saveCount, shareCount: u.shareCount, viewCount: u.viewCount ?? 0,
         eventId: u.eventId ? String(u.eventId) : null, author,
         viewerReactions: reactions[String(u._id)] ?? { liked: false, saved: false },

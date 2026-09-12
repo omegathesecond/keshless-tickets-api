@@ -276,7 +276,7 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
 
   const updateSlides: FeedSlide[] = updates.map((u) => ({
     type: 'update', id: String(u._id), sortAt: u.createdAt.toISOString(),
-    kind: u.kind, caption: u.caption, media: u.media,
+    kind: u.kind, caption: u.caption, editedAt: u.editedAt ? new Date(u.editedAt).toISOString() : null, media: u.media,
     likeCount: u.likeCount, saveCount: u.saveCount, shareCount: u.shareCount, viewCount: u.viewCount ?? 0,
     // `?? 0`: posts created before the counter existed have no stored field,
     // and `undefined + 1` would render NaN on the rail after the first comment.

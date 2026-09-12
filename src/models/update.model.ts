@@ -40,6 +40,10 @@ export interface IUpdate extends Document {
    *  @services/whatsHot.service). Absent for a post with no specific date
    *  (e.g. a general nightlife/fashion recommendation). */
   activityDate?: Date | null;
+  /** Set the first time the caption is edited post-publish; stays set (to the
+   *  latest edit time) after that. Null/absent means never edited — drives
+   *  the "Edited" label next to the post's timestamp everywhere it appears. */
+  editedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -78,6 +82,7 @@ const updateSchema = new Schema<IUpdate>({
   hotCategory: { type: String, enum: [...WHATS_HOT_CATEGORIES, null], default: null },
   venue: { type: String, maxlength: 200, default: null },
   activityDate: { type: Date, default: null },
+  editedAt: { type: Date, default: null },
 }, { timestamps: true });
 
 updateSchema.index({ createdAt: -1 });

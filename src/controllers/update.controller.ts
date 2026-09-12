@@ -12,13 +12,17 @@ import type { UpdateAuthorType } from '@interfaces/update.interface';
 
 const AUTHOR_TYPES: UpdateAuthorType[] = ['buyer', 'vendor'];
 const PAGE_SIZE = 24;
+/** Shared by create, createAsVendor and editCaption — one caption-length rule
+ *  everywhere it's enforced, per the "same limits used when creating a post"
+ *  requirement on edits. */
+const MAX_CAPTION_LENGTH = 500;
 
 export class UpdateController {
   static async create(req: Request, res: Response): Promise<any> {
     const buyer = await resolveBuyerFromRequest(req);
     if (!buyer) return ApiResponseUtil.unauthorized(res, 'Please sign in first');
     const { caption = '', eventId, items } = req.body || {};
-    if (typeof caption === 'string' && caption.length > 500) return ApiResponseUtil.validationError(res, 'caption too long');
+    if (typeof caption === 'string' && caption.length > MAX_CAPTION_LENGTH) return ApiResponseUtil.validationError(res, 'caption too long');
     const v = validateCreateItems(req.body?.kind, items);
     if (!v.ok) return ApiResponseUtil.validationError(res, v.message);
     const hot = validateWhatsHotFields(req.body);
@@ -59,7 +63,7 @@ export class UpdateController {
     const vendorId = (req as any).ticketsUser?.vendorId;
     if (!vendorId) return ApiResponseUtil.unauthorized(res, 'Vendor sign-in required');
     const { caption = '', eventId, items } = req.body || {};
-    if (typeof caption === 'string' && caption.length > 500) return ApiResponseUtil.validationError(res, 'caption too long');
+    if (typeof caption === 'string' && caption.length > MAX_CAPTION_LENGTH) return ApiResponseUtil.validationError(res, 'caption too long');
     const v = validateCreateItems(req.body?.kind, items);
     if (!v.ok) return ApiResponseUtil.validationError(res, v.message);
     const hot = validateWhatsHotFields(req.body);
@@ -95,8 +99,15 @@ export class UpdateController {
   /**
    * PATCH /api/public/updates/:id — content owner edits their caption (and,
    * for a What's Hot post, its venue/category/activityDate) after publishing
-   * without re-uploading the media (spec §5). Author-only, same actor
-   * resolution `remove()` uses so a brand can edit its own post too.
+   * without re-uploading the media (spec §5). ONE path for both buyer- and
+   * vendor-authored posts (mounted with optionalTicketsAuth, actor resolved
+   * here), same reasoning as remove(): updateBase() would send a vendor to
+   * /api/tickets/updates, which has no PATCH.
+   *
+   * Ownership is enforced HERE, server-side — never trust the client's menu
+   * gating alone. A platform superadmin may also edit (same moderator
+   * carve-out as remove()'s isSuperAdmin bypass). At least one editable
+   * field must be present, or there's nothing to do.
    */
   static async update(req: Request, res: Response): Promise<any> {
     const id = req.params['id'] as string;
@@ -104,18 +115,22 @@ export class UpdateController {
     const existing = await Update.findById(id);
     if (!existing || existing.status === 'removed') return ApiResponseUtil.notFound(res, 'Update not found');
     const actor = await resolveActorFromRequest(req).catch(() => null);
-    if (!UpdateController.isActorAuthor(existing, actor)) return ApiResponseUtil.forbidden(res, 'Not your update');
+    const isSuperAdmin = (req as any).ticketsUser?.isSuperAdmin === true;
+    if (!UpdateController.isActorAuthor(existing, actor) && !isSuperAdmin) return ApiResponseUtil.forbidden(res, 'Not your update');
 
     const { caption } = req.body || {};
-    if (caption !== undefined && (typeof caption !== 'string' || caption.length > 500)) {
+    if (caption !== undefined && (typeof caption !== 'string' || caption.length > MAX_CAPTION_LENGTH)) {
       return ApiResponseUtil.validationError(res, 'caption too long');
     }
     const hot = validateWhatsHotFields({ feature: existing.feature ?? undefined, ...req.body });
     if (!hot.ok) return ApiResponseUtil.validationError(res, hot.message);
+    if (caption === undefined && hot.fields.hotCategory === undefined && hot.fields.venue === undefined && hot.fields.activityDate === undefined) {
+      return ApiResponseUtil.validationError(res, 'Nothing to update');
+    }
 
     try {
       const updated = await editUpdate(id, { caption, ...hot.fields });
-      return ApiResponseUtil.success(res, UpdateController.dto(updated));
+      return ApiResponseUtil.success(res, UpdateController.dto(updated, undefined, UpdateController.isActorAuthor(updated, actor)));
     } catch (err: any) {
       return ApiResponseUtil.error(res, err?.message || 'Failed to update', 500);
     }
@@ -321,6 +336,7 @@ export class UpdateController {
       authorId: String(update.authorId),
       kind: update.kind,
       caption: update.caption,
+      editedAt: update.editedAt ? update.editedAt.toISOString() : null,
       eventId: update.eventId ? String(update.eventId) : null,
       media: update.media,
       likeCount: update.likeCount,
