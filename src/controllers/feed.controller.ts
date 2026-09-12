@@ -19,9 +19,13 @@ export class FeedController {
     if (!isTab(tab)) return ApiResponseUtil.validationError(res, 'Invalid tab');
     const cursor = req.query['cursor'] ? String(req.query['cursor']) : undefined;
     const category = req.query['category'] ? String(req.query['category']) : undefined;
+    // Client-computed "is it Thu/Fri/Sat in MY local timezone" (What's Hot
+    // spec §1) — see FeedOpts.promoteHot's doc comment for why this can't be
+    // derived server-side.
+    const promoteHot = req.query['promoteHot'] === 'true';
     const actor = await resolveActorFromRequest(req).catch(() => null);
     try {
-      const { items, nextCursor } = await getFeed({ tab, cursor, actor: actor ?? undefined, category });
+      const { items, nextCursor } = await getFeed({ tab, cursor, actor: actor ?? undefined, category, promoteHot });
       if (actor) {
         // Platform-staff moderator? Same rule as requireSuperAdminOrPermission
         // (MODERATE_SOCIAL) — computed once from the token, identical for every
@@ -57,6 +61,19 @@ export class FeedController {
           for (const i of items as FeedSlide[]) {
             if (i.type !== 'event') continue;
             i['viewerReactions'] = erx[i.id] ?? null;
+          }
+        }
+
+        // A 'hot' slide's real posts are each item inside its `items` array,
+        // not the slide itself (the slide's own `id` is a synthetic
+        // `hot-<firstItemId>` key) — same viewerReactions treatment as the
+        // 'update' block above, just addressed one level deeper.
+        const hotItemIds = items.filter((i) => i.type === 'hot').flatMap((i: any) => (i.items as any[]).map((it) => it.id));
+        if (hotItemIds.length) {
+          const rx = await getViewerReactions(hotItemIds, actor);
+          for (const i of items as FeedSlide[]) {
+            if (i.type !== 'hot') continue;
+            for (const it of (i as any).items) it.viewerReactions = rx[it.id] ?? null;
           }
         }
       }

@@ -3,9 +3,10 @@ import { ApiResponseUtil } from '@utils/apiResponse.util';
 import { resolveBuyerFromRequest } from '@utils/buyerRequest.util';
 import { resolveActorFromRequest, isActorAuthorOf, type SocialActor } from '@utils/socialActor.util';
 import { failWithHttpError, HEX24 } from '@utils/controllerHelpers.util';
-import { createUpdate, finalizeUpdate, getUpdate, toggleReaction, recordShare, recordView, getViewerReactions } from '@services/update.service';
+import { createUpdate, editUpdate, finalizeUpdate, getUpdate, toggleReaction, recordShare, recordView, getViewerReactions } from '@services/update.service';
 import { resolveUpdateAuthor } from '@services/updateAuthor';
 import { validateCreateItems } from '@utils/updateCreate.util';
+import { validateWhatsHotFields } from '@utils/whatsHotCreate.util';
 import { Update } from '@models/update.model';
 import type { UpdateAuthorType } from '@interfaces/update.interface';
 
@@ -20,9 +21,11 @@ export class UpdateController {
     if (typeof caption === 'string' && caption.length > 500) return ApiResponseUtil.validationError(res, 'caption too long');
     const v = validateCreateItems(req.body?.kind, items);
     if (!v.ok) return ApiResponseUtil.validationError(res, v.message);
+    const hot = validateWhatsHotFields(req.body);
+    if (!hot.ok) return ApiResponseUtil.validationError(res, hot.message);
     try {
       const { update, uploads } = await createUpdate({
-        authorType: 'buyer', authorId: String(buyer._id), kind: v.kind, caption, eventId, items: v.items,
+        authorType: 'buyer', authorId: String(buyer._id), kind: v.kind, caption, eventId, items: v.items, ...hot.fields,
       });
       return ApiResponseUtil.created(res, { updateId: update.id, uploads });
     } catch (err: any) {
@@ -59,9 +62,11 @@ export class UpdateController {
     if (typeof caption === 'string' && caption.length > 500) return ApiResponseUtil.validationError(res, 'caption too long');
     const v = validateCreateItems(req.body?.kind, items);
     if (!v.ok) return ApiResponseUtil.validationError(res, v.message);
+    const hot = validateWhatsHotFields(req.body);
+    if (!hot.ok) return ApiResponseUtil.validationError(res, hot.message);
     try {
       const { update, uploads } = await createUpdate({
-        authorType: 'vendor', authorId: String(vendorId), kind: v.kind, caption, eventId, items: v.items,
+        authorType: 'vendor', authorId: String(vendorId), kind: v.kind, caption, eventId, items: v.items, ...hot.fields,
       });
       return ApiResponseUtil.created(res, { updateId: update.id, uploads });
     } catch (err: any) {
@@ -84,6 +89,35 @@ export class UpdateController {
       return ApiResponseUtil.success(res, UpdateController.dto(out));
     } catch (err: any) {
       return ApiResponseUtil.error(res, err?.message || 'Failed to finalize', 500);
+    }
+  }
+
+  /**
+   * PATCH /api/public/updates/:id — content owner edits their caption (and,
+   * for a What's Hot post, its venue/category/activityDate) after publishing
+   * without re-uploading the media (spec §5). Author-only, same actor
+   * resolution `remove()` uses so a brand can edit its own post too.
+   */
+  static async update(req: Request, res: Response): Promise<any> {
+    const id = req.params['id'] as string;
+    if (!HEX24.test(id)) return ApiResponseUtil.validationError(res, 'Invalid update id');
+    const existing = await Update.findById(id);
+    if (!existing || existing.status === 'removed') return ApiResponseUtil.notFound(res, 'Update not found');
+    const actor = await resolveActorFromRequest(req).catch(() => null);
+    if (!UpdateController.isActorAuthor(existing, actor)) return ApiResponseUtil.forbidden(res, 'Not your update');
+
+    const { caption } = req.body || {};
+    if (caption !== undefined && (typeof caption !== 'string' || caption.length > 500)) {
+      return ApiResponseUtil.validationError(res, 'caption too long');
+    }
+    const hot = validateWhatsHotFields({ feature: existing.feature ?? undefined, ...req.body });
+    if (!hot.ok) return ApiResponseUtil.validationError(res, hot.message);
+
+    try {
+      const updated = await editUpdate(id, { caption, ...hot.fields });
+      return ApiResponseUtil.success(res, UpdateController.dto(updated));
+    } catch (err: any) {
+      return ApiResponseUtil.error(res, err?.message || 'Failed to update', 500);
     }
   }
 
@@ -297,6 +331,10 @@ export class UpdateController {
       createdAt: update.createdAt,
       viewerReactions: reactions ?? null,
       viewerIsAuthor,
+      feature: update.feature ?? null,
+      hotCategory: update.hotCategory ?? null,
+      venue: update.venue ?? null,
+      activityDate: update.activityDate ?? null,
       ...(author ? { author } : {}),
     };
   }

@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
-import type { UpdateAuthorType, UpdateKind, UpdateMedia } from '@interfaces/update.interface';
+import type { UpdateAuthorType, UpdateFeature, UpdateKind, UpdateMedia } from '@interfaces/update.interface';
+import { WHATS_HOT_CATEGORIES, WhatsHotCategory } from '@/constants/whatsHotCategories';
 import { mediaSchema } from '@models/shared/media.schema';
 
 export interface IUpdate extends Document {
@@ -25,6 +26,20 @@ export interface IUpdate extends Document {
   hiddenFromDiscoverAt?: Date | null;
   /** The moderator (vendor/sub-user id) who hid it — audit trail for the above. */
   hiddenFromDiscoverBy?: string | null;
+  /** "What's Hot This Weekend" section membership — see UpdateFeature's doc
+   *  comment. `null`/absent for every ordinary post. */
+  feature?: UpdateFeature | null;
+  /** Only meaningful when `feature: 'whats-hot'` — the See All page's
+   *  category filter. */
+  hotCategory?: WhatsHotCategory | null;
+  /** Venue or destination text (spec §2/§4) — free text, not a linked Event;
+   *  a post can also carry a real `eventId` alongside this. */
+  venue?: string | null;
+  /** When the promoted activity/event happens — drives the This
+   *  Weekend/Starts Tomorrow/Weekend Loading label and expiry (see
+   *  @services/whatsHot.service). Absent for a post with no specific date
+   *  (e.g. a general nightlife/fashion recommendation). */
+  activityDate?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -55,6 +70,14 @@ const updateSchema = new Schema<IUpdate>({
   // satisfies for posts predating this field). A Date takes it off Discover.
   hiddenFromDiscoverAt: { type: Date, default: null },
   hiddenFromDiscoverBy: { type: String, default: null },
+  // `null` included in both enum arrays: Mongoose's enum validator runs
+  // against the stored value even when the field's own `default` is null,
+  // so an ordinary post (which never sets either field, relying purely on
+  // the default) would otherwise fail validation on every single create().
+  feature: { type: String, enum: ['whats-hot', null], default: null },
+  hotCategory: { type: String, enum: [...WHATS_HOT_CATEGORIES, null], default: null },
+  venue: { type: String, maxlength: 200, default: null },
+  activityDate: { type: Date, default: null },
 }, { timestamps: true });
 
 updateSchema.index({ createdAt: -1 });
@@ -62,5 +85,8 @@ updateSchema.index({ authorType: 1, authorId: 1, createdAt: -1 });
 updateSchema.index({ 'media.status': 1, status: 1, createdAt: -1 });
 // Multikey: serves "recent visible updates for hashtag X" (future trending query).
 updateSchema.index({ hashtags: 1, createdAt: -1 });
+// Serves the What's Hot rail/See All queries (feature:'whats-hot', status
+// active, media ready) sorted/filtered by category and activityDate.
+updateSchema.index({ feature: 1, hotCategory: 1, activityDate: 1, createdAt: -1 });
 
 export const Update = mongoose.model<IUpdate>('Update', updateSchema);
