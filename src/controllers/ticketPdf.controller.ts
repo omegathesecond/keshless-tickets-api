@@ -23,6 +23,28 @@ function sendPdf(res: Response, buffer: Buffer, filename: string): void {
   res.send(buffer);
 }
 
+type BundleTicketIdsValidation =
+  | { ok: true; ticketIds: string[] }
+  | { ok: false; message: string };
+
+/**
+ * Shared shape check for a `{ ticketIds: string[] }` bundle request body, used
+ * by both the buyer (`downloadTicketsBundle`) and vendor
+ * (`downloadVendorTicketsBundle`) bundle endpoints so the cap and the
+ * validation rule can't drift between the two copies. Runs before either
+ * route touches the database — a 1000-element list must still cost zero DB
+ * lookups.
+ */
+function validateBundleTicketIds(ticketIds: unknown): BundleTicketIdsValidation {
+  if (!Array.isArray(ticketIds) || ticketIds.length === 0 || !ticketIds.every((id) => typeof id === 'string')) {
+    return { ok: false, message: 'ticketIds must be a non-empty array of ticket ids' };
+  }
+  if (ticketIds.length > MAX_BUNDLE_TICKETS) {
+    return { ok: false, message: `Cannot bundle more than ${MAX_BUNDLE_TICKETS} tickets at once` };
+  }
+  return { ok: true, ticketIds };
+}
+
 /**
  * Two families of ticket-PDF endpoint share this controller:
  *
@@ -102,13 +124,11 @@ export class TicketPdfController {
    */
   static async downloadVendorTicketsBundle(req: Request, res: Response): Promise<any> {
     try {
-      const ticketIds: unknown = req.body?.ticketIds;
-      if (!Array.isArray(ticketIds) || ticketIds.length === 0 || !ticketIds.every((id) => typeof id === 'string')) {
-        return ApiResponseUtil.badRequest(res, 'ticketIds must be a non-empty array of ticket ids');
+      const validation = validateBundleTicketIds(req.body?.ticketIds);
+      if (!validation.ok) {
+        return ApiResponseUtil.badRequest(res, validation.message);
       }
-      if (ticketIds.length > MAX_BUNDLE_TICKETS) {
-        return ApiResponseUtil.badRequest(res, `Cannot bundle more than ${MAX_BUNDLE_TICKETS} tickets at once`);
-      }
+      const { ticketIds } = validation;
 
       const ticketsUser = (req as any).ticketsUser || {};
       const tickets: ITicket[] = [];
@@ -134,13 +154,11 @@ export class TicketPdfController {
   /** POST /api/public/tickets/pdf-bundle — several tickets as ONE downloadable PDF. */
   static async downloadTicketsBundle(req: Request, res: Response): Promise<any> {
     try {
-      const ticketIds: unknown = req.body?.ticketIds;
-      if (!Array.isArray(ticketIds) || ticketIds.length === 0 || !ticketIds.every((id) => typeof id === 'string')) {
-        return ApiResponseUtil.badRequest(res, 'ticketIds must be a non-empty array of ticket ids');
+      const validation = validateBundleTicketIds(req.body?.ticketIds);
+      if (!validation.ok) {
+        return ApiResponseUtil.badRequest(res, validation.message);
       }
-      if (ticketIds.length > MAX_BUNDLE_TICKETS) {
-        return ApiResponseUtil.badRequest(res, `Cannot bundle more than ${MAX_BUNDLE_TICKETS} tickets at once`);
-      }
+      const { ticketIds } = validation;
 
       const buyer = await resolveBuyerFromRequest(req);
       if (!buyer) {
