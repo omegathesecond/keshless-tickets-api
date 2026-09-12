@@ -17,6 +17,7 @@ import { requireProfilePhoto } from '@middleware/requirePhoto.middleware';
 import { avatarUpload, communityEventUpload, handleMulterError, validateFileUpload } from '@middleware/media.middleware';
 import { CommunityEventSubmitController } from '@controllers/communityEventSubmit.controller';
 import { VoteController } from '@controllers/vote.controller';
+import { WeekendRecapController } from '@controllers/weekendRecap.controller';
 
 const router = Router();
 
@@ -158,6 +159,17 @@ router.get('/updates/by/:authorType/:authorId', optionalTicketsAuth, UpdateContr
  * @query   cursor (createdAt ISO string of the last item on the prior page)
  */
 router.get('/updates/for-event/:eventId', optionalTicketsAuth, UpdateController.listByEvent);
+
+/**
+ * @route   GET /api/public/weekend-recaps
+ * @desc    Weekend Recap "See All" page — every visible weekend_recap post,
+ *          sorted/filtered. Same DTO as the other Update listings.
+ * @access  Public (optional tickets token for viewerReactions)
+ * @query   page (default 1), limit (1-50, default 20),
+ *          sort (recommended|latest|most_viewed|most_liked, default recommended),
+ *          filter (events|vacations|nightlife|music|food|travel|nearby, optional)
+ */
+router.get('/weekend-recaps', optionalTicketsAuth, WeekendRecapController.list);
 
 /**
  * Vote (spec: event-engagement voting feature). Event-detail page (§3) +

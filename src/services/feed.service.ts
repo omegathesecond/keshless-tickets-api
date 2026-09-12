@@ -15,12 +15,14 @@ import type { SocialActor } from '@utils/socialActor.util';
 import { buildEventCardFields } from '@utils/eventCard.util';
 import { getVoteFeedCard } from '@services/vote.service';
 import { EventPlanService } from '@services/eventPlan.service';
+import { weekendRecapCandidates, rankWeekendRecapCandidates, buildWeekendRecapFeedSlides } from '@services/weekendRecap.service';
 
 export type FeedSlide =
   | { type: 'update'; id: string; sortAt: string; [k: string]: any }
   | { type: 'event'; id: string; sortAt: string; [k: string]: any }
   | { type: 'vote'; id: string; sortAt: string; [k: string]: any }
-  | { type: 'plan'; id: string; sortAt: string; [k: string]: any };
+  | { type: 'plan'; id: string; sortAt: string; [k: string]: any }
+  | { type: 'weekendRecap'; id: string; sortAt: string; [k: string]: any };
 
 interface FeedOpts { tab: 'for-you' | 'following' | 'events'; cursor?: string; actor?: SocialActor; limit?: number; category?: string; }
 /** `e` is the $skip-based event cursor. `s` ("seen") covers update ids already
@@ -37,13 +39,14 @@ interface FeedOpts { tab: 'for-you' | 'following' | 'events'; cursor?: string; a
  *  guard that keeps a fresh load from opening on a Vote card has no memory
  *  of what a continuation request's page just ended on, and two Vote cards
  *  can land back-to-back across the pagination boundary. `lp` ("last was
- *  plan") is the identical carry-forward for Event Plan cards. */
-interface Cursor { e?: number; s?: string[]; v?: string[]; p?: string[]; lv?: boolean; lp?: boolean; }
+ *  plan") is the identical carry-forward for Event Plan cards. `wr`/`lwr`
+ *  are the same pair of mechanisms again for the Weekend Recap slot. */
+interface Cursor { e?: number; s?: string[]; v?: string[]; p?: string[]; wr?: string[]; lv?: boolean; lp?: boolean; lwr?: boolean; }
 
 function decode(cursor?: string): Cursor { if (!cursor) return {}; try { return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')); } catch { return {}; } }
 function encode(c: Cursor): string { return Buffer.from(JSON.stringify(c)).toString('base64url'); }
 
-type Slot = 'u' | 'e' | 'v' | 'p';
+type Slot = 'u' | 'e' | 'v' | 'p' | 'wr';
 
 // per-window slot pattern (11): mostly posts, an event every ~4th slot, a
 // Vote card once every 11, and an Event Plan card once every 11 — "mix ...
@@ -62,8 +65,17 @@ type Slot = 'u' | 'e' | 'v' | 'p';
 // should camp on a fixed position). Each getFeed() call builds its pattern
 // buffer from scratch, so a fresh load/refresh (no cursor) always
 // re-randomizes from slot 0.
+// Weekend Recap gets one 'wr' slot per window, the same base frequency as
+// Vote and Event Plan (~1-in-11) — kept a FIXED 11-token pool (one 'u' traded
+// for 'wr', 'v'/'p' left at the same trailing indices) rather than growing
+// the window or varying its shape by day-of-week: "prioritize Weekend Recap
+// from Sunday through Tuesday" is done via rankWeekendRecapCandidates
+// (WHICH posts surface) instead of changing how OFTEN the slot itself
+// appears, which would make the interleave pattern's shape date-dependent —
+// this window is what feed.service.test.ts's Math.random()-driven Vote/Plan
+// adjacency tests assume is stable on every day of the week.
 function shuffledWindow(): Slot[] {
-  const tokens: Slot[] = ['u', 'u', 'u', 'u', 'u', 'u', 'u', 'e', 'e', 'v', 'p'];
+  const tokens: Slot[] = ['u', 'u', 'u', 'u', 'u', 'u', 'wr', 'e', 'e', 'v', 'p'];
   for (let i = tokens.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     const tmp = tokens[i]!;
@@ -93,10 +105,10 @@ function appendWindow(pattern: Slot[], guardZeroFor: ReadonlySet<Slot>): void {
   const win = shuffledWindow();
   const isFirstWindow = pattern.length === 0;
   const prevTail = pattern[pattern.length - 1];
-  for (const special of ['v', 'p'] as const) {
+  for (const special of ['v', 'p', 'wr'] as const) {
     if (win[0] !== special) continue;
     if (!(prevTail === special || (isFirstWindow && guardZeroFor.has(special)))) continue;
-    const swapIdx = win.findIndex((t, idx) => idx > 0 && t !== 'v' && t !== 'p');
+    const swapIdx = win.findIndex((t, idx) => idx > 0 && t !== 'v' && t !== 'p' && t !== 'wr');
     if (swapIdx > 0) {
       const tmp = win[0]!;
       win[0] = win[swapIdx]!;
@@ -250,7 +262,8 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
 
   const updateSlides: FeedSlide[] = updates.map((u) => ({
     type: 'update', id: String(u._id), sortAt: u.createdAt.toISOString(),
-    kind: u.kind, caption: u.caption, editedAt: u.editedAt ? new Date(u.editedAt).toISOString() : null, media: u.media,
+    kind: u.kind, category: u.category ?? 'general', caption: u.caption, location: u.location ?? null,
+    editedAt: u.editedAt ? new Date(u.editedAt).toISOString() : null, media: u.media,
     likeCount: u.likeCount, saveCount: u.saveCount, shareCount: u.shareCount, viewCount: u.viewCount ?? 0,
     // `?? 0`: posts created before the counter existed have no stored field,
     // and `undefined + 1` would render NaN on the rail after the first comment.
@@ -306,23 +319,40 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
     for (const card of cards) planSlides.push(card as FeedSlide);
   }
 
+  // Weekend Recap section cards (Home-feed placement spec) — same two
+  // personal-scroll tabs as Vote/Plan, same ~1-in-11 slot frequency, and
+  // "don't repeatedly show the same content during one browsing session"
+  // via `cur.wr`, identical mechanism. "Prioritize ... Sunday through
+  // Tuesday" happens inside rankWeekendRecapCandidates (which posts get
+  // picked), not by changing how often the slot itself appears.
+  const wrSlides: FeedSlide[] = [];
+  if (opts.tab === 'for-you' || opts.tab === 'following') {
+    const wrBudget = Math.max(1, Math.ceil(limit / 11));
+    const raw = await weekendRecapCandidates(wrBudget, cur.wr ?? [], opts.tab === 'for-you');
+    const ranked = rankWeekendRecapCandidates(raw, wrBudget);
+    const cards = await buildWeekendRecapFeedSlides(ranked, opts.actor ?? null);
+    for (const card of cards) wrSlides.push(card as FeedSlide);
+  }
+
   // ---- interleave by a freshly-shuffled pattern, dropping dry slots ----
-  const q = { u: updateSlides, e: eventSlides, v: voteSlides, p: planSlides };
+  const q = { u: updateSlides, e: eventSlides, v: voteSlides, p: planSlides, wr: wrSlides };
   const items: FeedSlide[] = [];
   const pattern: Slot[] = [];
   const isFreshLoad = !opts.cursor;
   const guardZeroFor = new Set<Slot>(
-    isFreshLoad ? (['v', 'p'] as const) : ([...(cur.lv ? (['v'] as const) : []), ...(cur.lp ? (['p'] as const) : [])] as const),
+    isFreshLoad
+      ? (['v', 'p', 'wr'] as const)
+      : ([...(cur.lv ? (['v'] as const) : []), ...(cur.lp ? (['p'] as const) : []), ...(cur.lwr ? (['wr'] as const) : [])] as const),
   );
   let pi = 0;
-  while (items.length < limit && (q.u.length || q.e.length || q.v.length || q.p.length)) {
+  while (items.length < limit && (q.u.length || q.e.length || q.v.length || q.p.length || q.wr.length)) {
     if (pi >= pattern.length) appendWindow(pattern, guardZeroFor);
     const slot = pattern[pi]!;
     pi++;
     const bucket = q[slot];
     if (bucket.length) { items.push(bucket.shift()!); continue; }
-    // slot dry: fall back to whichever has items (u > e > v > p), else break out of this pass
-    const fallback = q.u.length ? q.u : q.e.length ? q.e : q.v.length ? q.v : q.p.length ? q.p : null;
+    // slot dry: fall back to whichever has items (u > e > v > p > wr), else break out of this pass
+    const fallback = q.u.length ? q.u : q.e.length ? q.e : q.v.length ? q.v : q.p.length ? q.p : q.wr.length ? q.wr : null;
     if (!fallback) break;
     items.push(fallback.shift()!);
   }
@@ -355,6 +385,12 @@ export async function getFeed(opts: FeedOpts): Promise<{ items: FeedSlide[]; nex
   // so a continuation request can't open on an Event Plan card right after
   // this page's last item was one.
   if (items[items.length - 1]?.type === 'plan') next.lp = true;
+
+  const consumedRecapIds = items.filter((i) => i.type === 'weekendRecap').map((i) => i.id);
+  const mergedRecapSeen = [...(cur.wr ?? []), ...consumedRecapIds];
+  if (mergedRecapSeen.length) next.wr = mergedRecapSeen;
+  // Carried to the next page's slot-0 guard, same reasoning as lv/lp above.
+  if (items[items.length - 1]?.type === 'weekendRecap') next.lwr = true;
 
   const anyMore = items.length >= limit; // conservative: only advertise more if we filled a page
   return { items, nextCursor: anyMore ? encode(next) : null };

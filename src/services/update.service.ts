@@ -5,7 +5,7 @@ import { Buyer } from '@models/buyer.model';
 import { updatesR2 } from '@utils/updatesR2';
 import { extractHashtags } from '@utils/hashtags.util';
 import { triggerTranscode } from '@services/transcode.client';
-import type { UpdateAuthorType, UpdateKind } from '@interfaces/update.interface';
+import type { UpdateAuthorType, UpdateCategory, UpdateKind } from '@interfaces/update.interface';
 import { isActorAuthorOf, type SocialActor } from '@utils/socialActor.util';
 import { toggleReactionGeneric } from '@services/reactions.service';
 import { AccountActivityService } from '@services/accountActivity.service';
@@ -14,7 +14,9 @@ interface CreateInput {
   authorType: UpdateAuthorType;
   authorId: string;
   kind: UpdateKind;
+  category?: UpdateCategory;
   caption: string;
+  location?: string;
   eventId?: string;
   items: { ext: string; contentType: string }[];
 }
@@ -29,7 +31,9 @@ export async function createUpdate(input: CreateInput): Promise<{ update: IUpdat
     authorType: input.authorType,
     authorId: input.authorId,
     kind: input.kind,
+    category: input.category ?? 'general',
     caption: input.caption ?? '',
+    location: input.location || null,
     hashtags: extractHashtags(input.caption),
     eventId: input.eventId,
     media: prepared.map((p) => ({ rawKey: p.rawKey, status: 'processing' })),
@@ -154,7 +158,8 @@ export class UpdateService {
         : { type: 'buyer', id: String(u.authorId), name: bMap.get(String(u.authorId))?.name ?? null, username: bMap.get(String(u.authorId))?.username ?? null, avatarUrl: bMap.get(String(u.authorId))?.avatarUrl ?? null };
       return {
         type: 'update', id: String(u._id), sortAt: u.createdAt.toISOString(),
-        kind: u.kind, caption: u.caption, editedAt: u.editedAt ? u.editedAt.toISOString() : null, media: u.media,
+        kind: u.kind, category: u.category ?? 'general', caption: u.caption, location: u.location ?? null,
+        editedAt: u.editedAt ? u.editedAt.toISOString() : null, media: u.media,
         likeCount: u.likeCount, saveCount: u.saveCount, shareCount: u.shareCount, viewCount: u.viewCount ?? 0,
         eventId: u.eventId ? String(u.eventId) : null, author,
         viewerReactions: reactions[String(u._id)] ?? { liked: false, saved: false },

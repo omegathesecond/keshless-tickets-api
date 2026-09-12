@@ -1,12 +1,18 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
-import type { UpdateAuthorType, UpdateKind, UpdateMedia } from '@interfaces/update.interface';
+import type { UpdateAuthorType, UpdateCategory, UpdateKind, UpdateMedia } from '@interfaces/update.interface';
+import { UPDATE_CATEGORIES } from '@interfaces/update.interface';
 import { mediaSchema } from '@models/shared/media.schema';
 
 export interface IUpdate extends Document {
   authorType: UpdateAuthorType;
   authorId: Types.ObjectId;
   kind: UpdateKind;
+  /** 'general' (default) or 'weekend_recap' — see UpdateCategory's doc comment. */
+  category: UpdateCategory;
   caption: string;
+  /** Free-text location tag the author typed at post time (no geocoding —
+   *  there is no location-picker/maps integration anywhere in this app). */
+  location?: string | null;
   hashtags: string[];
   eventId?: Types.ObjectId;
   media: UpdateMedia[];
@@ -37,7 +43,9 @@ const updateSchema = new Schema<IUpdate>({
   authorType: { type: String, enum: ['vendor', 'buyer'], required: true },
   authorId: { type: Schema.Types.ObjectId, required: true },
   kind: { type: String, enum: ['video', 'image'], required: true },
+  category: { type: String, enum: UPDATE_CATEGORIES, default: 'general', index: true },
   caption: { type: String, default: '', maxlength: 500 },
+  location: { type: String, default: null, maxlength: 120 },
   hashtags: { type: [String], default: [], index: true },
   eventId: { type: Schema.Types.ObjectId, ref: 'Event', index: true },
   media: {
@@ -67,5 +75,8 @@ updateSchema.index({ authorType: 1, authorId: 1, createdAt: -1 });
 updateSchema.index({ 'media.status': 1, status: 1, createdAt: -1 });
 // Multikey: serves "recent visible updates for hashtag X" (future trending query).
 updateSchema.index({ hashtags: 1, createdAt: -1 });
+// Serves the Weekend Recap Home-feed slot and See-All page: "recent visible
+// weekend_recap posts", newest first.
+updateSchema.index({ category: 1, status: 1, createdAt: -1 });
 
 export const Update = mongoose.model<IUpdate>('Update', updateSchema);

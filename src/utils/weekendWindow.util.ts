@@ -28,3 +28,29 @@ export function nextWeekendWindow(now: Date = new Date()): WeekendWindow {
   const cur = currentWeekendWindow(now);
   return { start: new Date(cur.start.getTime() + 7 * 24 * 60 * 60 * 1000), end: new Date(cur.end.getTime() + 7 * 24 * 60 * 60 * 1000) };
 }
+
+export interface WeekendRecapWindow {
+  start: Date; // Sunday 00:00:00.000
+  end: Date; // Tuesday 23:59:59.999
+}
+
+/**
+ * The Sun 00:00 → Tue 23:59:59.999 window Weekend Recap prioritization
+ * refers to ("prioritize ... from Sunday through Tuesday using the user's
+ * local timezone"). Same documented approximation as `currentWeekendWindow`:
+ * Buyer has no stored timezone/UTC-offset field, so this is computed in UTC
+ * rather than genuinely per-user local — see that function's doc comment for
+ * the same unresolved follow-up.
+ */
+export function weekendRecapWindow(now: Date = new Date()): WeekendRecapWindow {
+  const day = now.getUTCDay(); // 0=Sun .. 6=Sat; the most recent Sunday is always `now - day days`.
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - day, 0, 0, 0, 0));
+  const end = new Date(start.getTime() + 3 * 24 * 60 * 60 * 1000 - 1);
+  return { start, end };
+}
+
+/** Whether `now` falls inside the current Sun-Tue Weekend Recap window. */
+export function isWithinWeekendRecapWindow(now: Date = new Date()): boolean {
+  const { start, end } = weekendRecapWindow(now);
+  return now >= start && now <= end;
+}

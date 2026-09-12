@@ -65,6 +65,39 @@ describe('POST /api/public/updates', () => {
       .send({ kind: 'image', items: Array(6).fill({ ext: 'jpg', contentType: 'image/jpeg' }) });
     expect(res.status).toBe(400);
   });
+
+  it('creates a weekend_recap post with a location, defaulting other posts to category general', async () => {
+    await Buyer.create({ phone: PHONE, password: 'secret1', avatarUrl: 'https://cdn.carrottickets.com/test/avatar.jpg', name: 'Poster' });
+    const res = await request(app)
+      .post('/api/public/updates')
+      .set('Authorization', `Bearer ${signBuyerToken(PHONE)}`)
+      .send({ kind: 'image', caption: 'weekend!', category: 'weekend_recap', location: 'Manzini', items: [{ ext: 'jpg', contentType: 'image/jpeg' }] })
+      .expect(201);
+    const saved = await Update.findById(res.body.data.updateId);
+    expect(saved?.category).toBe('weekend_recap');
+    expect(saved?.location).toBe('Manzini');
+  });
+
+  it('defaults category to general when omitted', async () => {
+    await Buyer.create({ phone: PHONE, password: 'secret1', avatarUrl: 'https://cdn.carrottickets.com/test/avatar.jpg', name: 'Poster' });
+    const res = await request(app)
+      .post('/api/public/updates')
+      .set('Authorization', `Bearer ${signBuyerToken(PHONE)}`)
+      .send({ kind: 'image', caption: 'regular post', items: [{ ext: 'jpg', contentType: 'image/jpeg' }] })
+      .expect(201);
+    const saved = await Update.findById(res.body.data.updateId);
+    expect(saved?.category).toBe('general');
+    expect(saved?.location).toBeNull();
+  });
+
+  it('400s an invalid category', async () => {
+    await Buyer.create({ phone: PHONE, password: 'secret1', avatarUrl: 'https://cdn.carrottickets.com/test/avatar.jpg', name: 'Poster' });
+    await request(app)
+      .post('/api/public/updates')
+      .set('Authorization', `Bearer ${signBuyerToken(PHONE)}`)
+      .send({ kind: 'image', category: 'not-a-real-category', items: [{ ext: 'jpg', contentType: 'image/jpeg' }] })
+      .expect(400);
+  });
 });
 
 describe('POST /api/public/updates/:id/view', () => {
