@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Ticket } from '@models/ticket.model';
 import { ITicket, TicketPdfStatus } from '@interfaces/ticket.interface';
 import { TicketPdfService } from '@services/ticketPdf.service';
+import { TicketService } from '@services/ticket.service';
 import { ApiResponseUtil } from '@utils/apiResponse.util';
 import { resolveBuyerFromRequest } from '@utils/buyerRequest.util';
 import { buyerTicketOr } from '@utils/ticketHolder.util';
@@ -62,6 +63,32 @@ export class TicketPdfController {
     } catch (error: any) {
       console.error('Download ticket PDF error:', error);
       return ApiResponseUtil.error(res, error.message || 'Failed to generate ticket PDF');
+    }
+  }
+
+  /**
+   * GET /api/tickets/:ticketId/pdf/download — one ticket as PDF BYTES for an
+   * organizer. Mirrors downloadTicketPdf, swapping the buyer check for vendor
+   * ownership. Bytes (not the R2 URL) because the dashboard assembles the ZIP
+   * client-side and cross-origin R2 fetches depend on bucket CORS.
+   */
+  static async downloadVendorTicketPdf(req: Request, res: Response): Promise<any> {
+    try {
+      const ticketsUser = (req as any).ticketsUser || {};
+      const ticket = await TicketService.resolveVendorTicket(
+        req.params['ticketId'] as string,
+        ticketsUser.vendorId as string,
+        ticketsUser.isSuperAdmin || false,
+      );
+      await ticket.populate('eventId', EVENT_POPULATE_FIELDS);
+      const buffer = await TicketPdfService.buildTicketPdfBuffer(ticket);
+      sendPdf(res, buffer, `${sanitizeFilenamePart(ticket.ticketId)}.pdf`);
+    } catch (error: any) {
+      const msg = error?.message || '';
+      if (/not authorized/i.test(msg)) return ApiResponseUtil.forbidden(res, 'You are not allowed to access this ticket');
+      if (/not found/i.test(msg)) return ApiResponseUtil.notFound(res, 'Ticket not found');
+      console.error('Vendor ticket PDF error:', error);
+      return ApiResponseUtil.error(res, msg || 'Failed to generate ticket PDF');
     }
   }
 

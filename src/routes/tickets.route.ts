@@ -183,6 +183,21 @@ router.get('/my-tickets', TicketsController.getMyTickets);
 router.post('/purchase', TicketsController.purchaseAsUser);
 
 /**
+ * Vendor ticket-PDF bytes download — the dashboard's per-ticket "Download"
+ * action, assembled client-side into a ZIP. Bytes (not the shareable R2 URL
+ * below) because cross-origin R2 fetches depend on bucket CORS. Vendor-scoped
+ * via TicketService.resolveVendorTicket (own ticket or super-admin), same
+ * ownership check as PATCH /:ticketId/recipient above. Registered before
+ * /:ticketId/pdf for consistency, though the two- and three-segment patterns
+ * cannot shadow each other.
+ */
+router.get(
+  '/:ticketId/pdf/download',
+  requireTicketsPermission(TicketsPermission.SELL_TICKETS),
+  TicketPdfController.downloadVendorTicketPdf
+);
+
+/**
  * Shareable ticket PDF — lazily generated and cached in R2.
  * Accepts the ticket code (TKT-…) or Mongo _id. Authorised either by the
  * requester's phone matching the ticket (user-app via proxy) or by vendor
